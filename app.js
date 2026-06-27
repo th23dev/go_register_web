@@ -87,7 +87,27 @@ function getRouteView() {
 }
 
 function isAdmin() {
-  return state.user?.role === "ADMIN";
+  return state.user?.role === "ADMIN" || state.user?.role === "MASTER_ADMIN";
+}
+
+function isMasterAdmin() {
+  return state.user?.role === "MASTER_ADMIN";
+}
+
+function roleLabel(role) {
+  if (role === "MASTER_ADMIN") return "Administrador Mestre";
+  if (role === "ADMIN") return "Administrador";
+  return "Funcionario";
+}
+
+function isPrivilegedRole(role) {
+  return role === "ADMIN" || role === "MASTER_ADMIN";
+}
+
+function canManageUser(user) {
+  if (!user) return false;
+  if (Number(user.id) === Number(state.user?.id)) return true;
+  return !isPrivilegedRole(user.role) || isMasterAdmin();
 }
 
 function canAccess(view) {
@@ -194,17 +214,19 @@ async function runAction(task, successMessage = "") {
 
 async function createInitialUsers() {
   const snap = await getDocs(collection(db, collections.users));
-  const users = snap.docs.map((item) => item.data());
-  if (!users.some((user) => user.username === "admin")) {
+  const users = snap.docs.map((item) => ({ ...item.data(), docId: item.id }));
+  const existingAdmin = users.find((user) => user.username === "admin");
+  if (existingAdmin && existingAdmin.role !== "MASTER_ADMIN") {
+    await updateDoc(doc(db, collections.users, existingAdmin.docId), { role: "MASTER_ADMIN" });
+  }
+  if (users.length === 0) {
     await setDoc(doc(db, collections.users, "1"), {
       id: 1,
       username: "admin",
       passwordHash: "admin",
-      role: "ADMIN",
+      role: "MASTER_ADMIN",
       isActive: true,
     });
-  }
-  if (!users.some((user) => user.username === "funcionario")) {
     await setDoc(doc(db, collections.users, "2"), {
       id: 2,
       username: "funcionario",
@@ -264,7 +286,6 @@ function renderLogin(error = "") {
         </label>
         <p class="error">${escapeHtml(error)}</p>
         <button class="btn full" type="submit">Entrar</button>
-        <button class="btn ghost" type="button" id="seedUsers">Criar Usuario Admin Padrao</button>
       </form>
     </main>
   `;
@@ -275,12 +296,6 @@ function renderLogin(error = "") {
     await login(form.get("username"), form.get("password"));
   });
 
-  document.querySelector("#seedUsers").addEventListener("click", async () => {
-    await runAction(
-      () => createInitialUsers(),
-      "Usuarios padrao criados: admin/admin e funcionario/123."
-    );
-  });
 }
 
 async function login(username, password) {
@@ -326,7 +341,7 @@ function renderApp(focusId = null) {
             <span></span>
             ${escapeHtml(syncLabel())}
           </div>
-          <div class="user-pill"><strong>${escapeHtml(state.user.username)}</strong>${escapeHtml(state.user.role)}</div>
+          <div class="user-pill"><strong>${escapeHtml(state.user.username)}</strong>${escapeHtml(roleLabel(state.user.role))}</div>
           <button class="btn secondary" id="logoutBtn">${icon("logout")} Sair</button>
         </div>
       </aside>
@@ -708,14 +723,15 @@ function renderUsers() {
     .filter((item) => item.username.toLowerCase().includes(state.search.toLowerCase()))
     .map((item) => {
       const isSelf = Number(item.id) === Number(state.user.id);
+      const canManage = canManageUser(item);
       return `<tr>
         <td><strong>${escapeHtml(item.username)}</strong>${isSelf ? ` <span class="badge">VOCE</span>` : ""}</td>
-        <td>${escapeHtml(item.role === "ADMIN" ? "Administrador" : "Funcionario")}</td>
+        <td>${escapeHtml(roleLabel(item.role))}</td>
         <td><span class="badge ${item.isActive === false ? "bad" : "good"}">${item.isActive === false ? "Inativo" : "Ativo"}</span></td>
         <td>
-          <button class="icon-btn" data-password-user="${item.id}" title="Alterar senha">${icon("lock")}</button>
-          <button class="icon-btn" data-edit-user="${item.id}" title="Editar">${icon("edit")}</button>
-          ${!isSelf ? `<button class="icon-btn" data-toggle-user="${item.id}" title="Ativar/Inativar">${icon("toggle_on")}</button><button class="icon-btn" data-delete-user="${item.id}" title="Excluir">${icon("delete")}</button>` : ""}
+          ${canManage ? `<button class="icon-btn" data-password-user="${item.id}" title="Alterar senha">${icon("lock")}</button>` : ""}
+          ${canManage ? `<button class="icon-btn" data-edit-user="${item.id}" title="Editar">${icon("edit")}</button>` : ""}
+          ${!isSelf && canManage ? `<button class="icon-btn" data-toggle-user="${item.id}" title="Ativar/Inativar">${icon("toggle_on")}</button><button class="icon-btn" data-delete-user="${item.id}" title="Excluir">${icon("delete")}</button>` : ""}
         </td>
       </tr>`;
     }).join(""));
@@ -1011,18 +1027,23 @@ function openSupplierModal(item = null) {
 
 function openUserModal(item = null) {
   if (!isAdmin()) return toast("Acesso restrito ao administrador.");
+  if (item && !canManageUser(item)) return toast("Apenas o administrador mestre pode gerenciar outros administradores.");
   const id = item?.id || nextId(state.data.users);
+  const roleOptions = isMasterAdmin()
+    ? [["MASTER_ADMIN", "MASTER_ADMIN"], ["ADMIN", "ADMIN"], ["OPERATOR", "OPERATOR"]]
+    : [["OPERATOR", "OPERATOR"]];
   openModal(item ? "Editar Usuario" : "Novo Usuario", `
     ${input("username", "Usuario", item?.username || "")}
     ${input("passwordHash", "Senha", item?.passwordHash || "")}
-    ${select("role", "Perfil", [["ADMIN", "ADMIN"], ["OPERATOR", "OPERATOR"]], item?.role || "OPERATOR")}
+    ${select("role", "Perfil", roleOptions, item?.role || "OPERATOR")}
     ${select("isActive", "Status", [["true", "Ativo"], ["false", "Inativo"]], item?.isActive === false ? "false" : "true")}
   `, async (form) => {
+    const role = isMasterAdmin() ? form.get("role") : "OPERATOR";
     await setDoc(doc(db, collections.users, String(id)), {
       id,
       username: form.get("username"),
       passwordHash: form.get("passwordHash"),
-      role: form.get("role"),
+      role,
       isActive: form.get("isActive") === "true",
     });
     toast("Usuario salvo.");
@@ -1033,6 +1054,7 @@ async function changeUserPassword(userId) {
   if (!isAdmin()) return toast("Acesso restrito ao administrador.");
   const user = findById(state.data.users, userId);
   if (!user) return;
+  if (!canManageUser(user)) return toast("Apenas o administrador mestre pode alterar senha de administradores.");
   const password = prompt(`Nova senha para ${user.username}:`);
   if (!password) return;
   await runAction(
@@ -1046,6 +1068,7 @@ async function toggleUser(userId) {
   if (Number(userId) === Number(state.user.id)) return toast("Voce nao pode inativar seu proprio usuario.");
   const user = findById(state.data.users, userId);
   if (!user) return;
+  if (!canManageUser(user)) return toast("Apenas o administrador mestre pode alterar status de administradores.");
   await runAction(
     () => updateDoc(doc(db, collections.users, String(userId)), { isActive: user.isActive === false }),
     user.isActive === false ? "Usuario ativado." : "Usuario inativado."
@@ -1055,6 +1078,8 @@ async function toggleUser(userId) {
 async function deleteUser(userId) {
   if (!isAdmin()) return toast("Acesso restrito ao administrador.");
   if (Number(userId) === Number(state.user.id)) return toast("Voce nao pode excluir seu proprio usuario.");
+  const user = findById(state.data.users, userId);
+  if (!canManageUser(user)) return toast("Apenas o administrador mestre pode excluir administradores.");
   await removeDoc(collections.users, userId);
 }
 
