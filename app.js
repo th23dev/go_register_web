@@ -49,10 +49,15 @@ const state = {
     entries: [],
     exits: [],
     users: [],
-    stockMovements: [],
+  stockMovements: [],
   },
   cart: [],
   search: "",
+  filters: {
+    cashHistoryDate: "",
+    reportsPeriod: "all",
+    reportsMonth: new Date().getMonth(),
+  },
   discount: 0,
   loading: true,
   loadedCollections: new Set(),
@@ -141,6 +146,45 @@ function todayBounds(offset = 0) {
   const end = new Date(start);
   end.setDate(end.getDate() + 1);
   return [start.getTime(), end.getTime()];
+}
+
+function dateInputBounds(value) {
+  if (!value) return null;
+  const [year, month, day] = String(value).split("-").map(Number);
+  if (!year || !month || !day) return null;
+  const start = new Date(year, month - 1, day, 0, 0, 0, 0);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 1);
+  return [start.getTime(), end.getTime()];
+}
+
+function formatDateInputLabel(value) {
+  const bounds = dateInputBounds(value);
+  return bounds ? dateOnly.format(new Date(bounds[0])) : "";
+}
+
+function reportFilterBounds() {
+  const now = new Date();
+  if (state.filters.reportsPeriod === "daily") return todayBounds();
+  if (state.filters.reportsPeriod === "weekly") {
+    const start = new Date(now);
+    start.setHours(0, 0, 0, 0);
+    start.setDate(start.getDate() - 7);
+    return [start.getTime(), now.getTime()];
+  }
+  if (state.filters.reportsPeriod === "monthly") {
+    const monthIndex = Number(state.filters.reportsMonth) || 0;
+    const start = new Date(now.getFullYear(), monthIndex, 1, 0, 0, 0, 0);
+    const end = new Date(now.getFullYear(), monthIndex + 1, 1, 0, 0, 0, 0);
+    return [start.getTime(), end.getTime()];
+  }
+  return null;
+}
+
+function inBounds(timestamp, bounds) {
+  if (!bounds) return true;
+  const value = Number(timestamp) || 0;
+  return value >= bounds[0] && value < bounds[1];
 }
 
 function escapeHtml(value) {
@@ -449,19 +493,19 @@ function renderDashboard() {
   const [yesterdayStart, yesterdayEnd] = todayBounds(-1);
   const weekStart = todayStart - 6 * 24 * 60 * 60 * 1000;
   const transactions = allTransactions();
-  const income = (start, end) => transactions
-    .filter((item) => !item.isCancelled && item.kind !== "exit" && item.timestamp >= start && item.timestamp < end)
-    .reduce((sum, item) => sum + item.amount, 0);
-  const totalToday = income(todayStart, todayEnd);
-  const yesterday = income(yesterdayStart, yesterdayEnd);
-  const weekly = income(weekStart, todayEnd);
-  const comparison = yesterday > 0 ? ((totalToday - yesterday) / yesterday) * 100 : 0;
-  const todayCount = transactions.filter((item) => item.kind === "sale" && item.timestamp >= todayStart && item.timestamp < todayEnd).length;
+  const netIncome = (start, end) => transactions
+    .filter((item) => !item.isCancelled && item.timestamp >= start && item.timestamp < end)
+    .reduce((sum, item) => sum + (item.kind === "exit" ? -item.amount : item.amount), 0);
+  const totalToday = netIncome(todayStart, todayEnd);
+  const yesterday = netIncome(yesterdayStart, yesterdayEnd);
+  const weekly = netIncome(weekStart, todayEnd);
+  const comparison = yesterday === 0 ? (totalToday > 0 ? 100 : 0) : ((totalToday - yesterday) / yesterday) * 100;
+  const todayCount = transactions.filter((item) => !item.isCancelled && item.timestamp >= todayStart && item.timestamp < todayEnd).length;
   const lowStock = state.data.products.filter((item) => Number(item.stockQuantity) <= Number(item.minStockThreshold));
 
   return `
     <section class="section">
-      <div class="grid cols-3">
+      <div class="grid cols-3 dashboard-metrics">
         <article class="panel metric primary">
           <span>Rendimento do Dia</span>
           <strong>${money.format(totalToday)}</strong>
@@ -476,7 +520,7 @@ function renderDashboard() {
           <strong>${todayCount}</strong>
         </article>
       </div>
-      <div class="grid cols-2">
+      <div class="grid cols-2 dashboard-content">
         <section class="panel">
           <h2>Extrato Recente</h2>
           <div class="transactions">
@@ -674,9 +718,19 @@ function registerReport(register) {
 }
 
 function renderCashHistory() {
-  const rows = [...state.data.registers].sort((a, b) => (Number(b.openingTimestamp) || 0) - (Number(a.openingTimestamp) || 0));
+  const bounds = dateInputBounds(state.filters.cashHistoryDate);
+  const rows = [...state.data.registers]
+    .filter((item) => inBounds(item.openingTimestamp, bounds))
+    .sort((a, b) => (Number(b.openingTimestamp) || 0) - (Number(a.openingTimestamp) || 0));
   return `
     <section class="section">
+      <div class="toolbar filters-toolbar">
+        <label class="field date-filter">
+          <span>${state.filters.cashHistoryDate ? `Filtrando: ${formatDateInputLabel(state.filters.cashHistoryDate)}` : "Filtrar por data"}</span>
+          <span class="input-wrap">${icon("calendar_month")}<input id="cashHistoryDate" type="date" value="${escapeHtml(state.filters.cashHistoryDate)}" /></span>
+        </label>
+        ${state.filters.cashHistoryDate ? `<button class="btn secondary" data-action="clear-cash-history-filter">${icon("filter_list_off")} Limpar filtro</button>` : ""}
+      </div>
       <div class="panel table-wrap">
         <table>
           <thead><tr><th>ID</th><th>Status</th><th>Abertura</th><th>Fechamento</th><th>Vendas</th><th>Entradas</th><th>Saidas</th><th>Saldo esperado</th><th>Saldo informado</th><th>Diferenca</th></tr></thead>
@@ -698,7 +752,7 @@ function renderCashHistory() {
                   <td>${report.difference == null ? "-" : `<span class="badge ${diffClass}">${money.format(report.difference)}</span>`}</td>
                 </tr>
               `;
-            }).join("") || `<tr><td colspan="10" class="muted">Nenhum caixa aberto ainda.</td></tr>`}
+            }).join("") || `<tr><td colspan="10" class="muted">${state.filters.cashHistoryDate ? "Nenhum fechamento nesta data." : "Nenhum caixa aberto ainda."}</td></tr>`}
           </tbody>
         </table>
       </div>
@@ -738,12 +792,57 @@ function renderUsers() {
 }
 
 function renderReports() {
-  const sold = state.data.sales.filter((item) => !item.sale?.isCancelled).reduce((sum, item) => sum + (Number(item.sale?.finalAmount) || 0), 0);
-  const exits = state.data.exits.filter((item) => !item.isCancelled).reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
-  const entries = state.data.entries.filter((item) => !item.isCancelled).reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+  const bounds = reportFilterBounds();
+  const reportTransactions = allTransactions().filter((item) => inBounds(item.timestamp, bounds));
+  const sold = state.data.sales
+    .filter((item) => !item.sale?.isCancelled && inBounds(item.sale?.timestamp, bounds))
+    .reduce((sum, item) => sum + (Number(item.sale?.finalAmount) || 0), 0);
+  const exits = state.data.exits
+    .filter((item) => !item.isCancelled && inBounds(item.timestamp, bounds))
+    .reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+  const entries = state.data.entries
+    .filter((item) => !item.isCancelled && inBounds(item.timestamp, bounds))
+    .reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
   const stockValue = state.data.products.reduce((sum, item) => sum + (Number(item.stockQuantity) || 0) * (Number(item.costPrice) || 0), 0);
+  const currentYear = new Date().getFullYear();
+  const months = monthNames();
   return `
     <section class="section">
+      <article class="panel report-export">
+        <div class="report-action">
+          <div class="report-icon">${icon("picture_as_pdf")}</div>
+          <div>
+            <h2>Exportar Relatorio de Vendas</h2>
+            <p class="muted">Gera um documento PDF detalhado com vendas, produtos e total geral.</p>
+          </div>
+        </div>
+        <div class="report-options">
+          <label class="field report-filter">
+            <span>Filtro</span>
+            <span class="input-wrap">
+              ${icon("filter_list")}
+              <select id="reportsPeriod">
+                <option value="all" ${state.filters.reportsPeriod === "all" ? "selected" : ""}>Todos</option>
+                <option value="daily" ${state.filters.reportsPeriod === "daily" ? "selected" : ""}>Hoje</option>
+                <option value="weekly" ${state.filters.reportsPeriod === "weekly" ? "selected" : ""}>Ultimos 7 dias</option>
+                <option value="monthly" ${state.filters.reportsPeriod === "monthly" ? "selected" : ""}>Mensal</option>
+              </select>
+            </span>
+          </label>
+          <label class="field report-month">
+            <span>Mes</span>
+            <span class="input-wrap">
+              ${icon("calendar_month")}
+              <select id="reportMonth">
+                ${months.map((month, index) => `<option value="${index}" ${Number(state.filters.reportsMonth) === index ? "selected" : ""}>${month} ${currentYear}</option>`).join("")}
+              </select>
+            </span>
+          </label>
+          <button class="btn" data-report-period="daily">${icon("today")} Relatorio Diario</button>
+          <button class="btn" data-report-period="weekly">${icon("date_range")} Relatorio Semanal</button>
+          <button class="btn secondary" data-report-period="monthly">${icon("download")} Exportar Mes</button>
+        </div>
+      </article>
       <div class="grid cols-3">
         <article class="panel metric primary"><span>Vendas Registradas</span><strong>${money.format(sold)}</strong></article>
         <article class="panel metric secondary"><span>Entradas Avulsas</span><strong>${money.format(entries)}</strong></article>
@@ -752,7 +851,7 @@ function renderReports() {
       <div class="panel metric"><span>Valor de Custo em Estoque</span><strong>${money.format(stockValue)}</strong></div>
       <div class="panel table-wrap">
         <table><thead><tr><th>Data</th><th>Tipo</th><th>Descricao</th><th>Valor</th></tr></thead><tbody>
-          ${allTransactions().map((item) => `<tr><td>${item.timestamp ? dateOnly.format(new Date(item.timestamp)) : "-"}</td><td>${item.kind}</td><td>${escapeHtml(item.title)}</td><td>${money.format(item.amount)}</td></tr>`).join("") || `<tr><td colspan="4">Sem dados.</td></tr>`}
+          ${reportTransactions.map((item) => `<tr><td>${item.timestamp ? dateOnly.format(new Date(item.timestamp)) : "-"}</td><td>${item.kind}</td><td>${escapeHtml(item.title)}</td><td>${money.format(item.amount)}</td></tr>`).join("") || `<tr><td colspan="4">Sem dados.</td></tr>`}
         </tbody></table>
       </div>
     </section>
@@ -794,6 +893,19 @@ function renderSettings() {
 
 function bindViewEvents() {
   document.querySelectorAll("[data-action]").forEach((button) => button.addEventListener("click", () => runNamedAction(button.dataset.action)));
+  document.querySelectorAll("[data-report-period]").forEach((button) => button.addEventListener("click", () => exportSalesReport(button.dataset.reportPeriod)));
+  document.querySelector("#reportsPeriod")?.addEventListener("change", (event) => {
+    state.filters.reportsPeriod = event.target.value;
+    renderApp();
+  });
+  document.querySelector("#reportMonth")?.addEventListener("change", (event) => {
+    state.filters.reportsMonth = Number(event.target.value) || 0;
+    if (state.filters.reportsPeriod === "monthly") renderApp();
+  });
+  document.querySelector("#cashHistoryDate")?.addEventListener("change", (event) => {
+    state.filters.cashHistoryDate = event.target.value;
+    renderApp();
+  });
   document.querySelectorAll("#posSearch,#inventorySearch,#genericSearch").forEach((input) => input.addEventListener("input", (event) => {
     state.search = event.target.value;
     renderApp(event.target.id);
@@ -931,6 +1043,10 @@ const actions = {
   "cart-clear": () => clearCart(),
   "theme-toggle": () => toggleTheme(),
   "refresh-data": () => renderApp(),
+  "clear-cash-history-filter": () => {
+    state.filters.cashHistoryDate = "";
+    renderApp();
+  },
   logout: () => logout(),
   checkout: () => openCheckoutModal(),
 };
@@ -1081,6 +1197,202 @@ async function deleteUser(userId) {
   const user = findById(state.data.users, userId);
   if (!canManageUser(user)) return toast("Apenas o administrador mestre pode excluir administradores.");
   await removeDoc(collections.users, userId);
+}
+
+function monthNames() {
+  return ["Janeiro", "Fevereiro", "Marco", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+}
+
+function getReportPeriod(period) {
+  const now = new Date();
+  if (period === "daily") {
+    const start = new Date(now);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(start);
+    end.setDate(end.getDate() + 1);
+    return {
+      startTime: start.getTime(),
+      endTime: end.getTime(),
+      title: "Relatorio de Vendas - Diario",
+      filename: "relatorio_vendas_diario.pdf",
+    };
+  }
+  if (period === "weekly") {
+    const start = new Date(now);
+    start.setHours(0, 0, 0, 0);
+    start.setDate(start.getDate() - 7);
+    return {
+      startTime: start.getTime(),
+      endTime: now.getTime(),
+      title: "Relatorio de Vendas - Semanal",
+      filename: "relatorio_vendas_semanal.pdf",
+    };
+  }
+
+  const monthIndex = Number(state.filters.reportsMonth ?? document.querySelector("#reportMonth")?.value ?? now.getMonth());
+  const year = now.getFullYear();
+  const start = new Date(year, monthIndex, 1, 0, 0, 0, 0);
+  const end = new Date(year, monthIndex + 1, 1, 0, 0, 0, 0);
+  const month = monthNames()[monthIndex];
+  return {
+    startTime: start.getTime(),
+    endTime: end.getTime(),
+    title: `Relatorio de Vendas - ${month} ${year}`,
+    filename: `relatorio_vendas_${month.toLowerCase()}.pdf`,
+  };
+}
+
+function saleProductNames(record) {
+  const names = (record.items || []).map((item) => {
+    const product = findById(state.data.products, item.productId);
+    const name = product?.name || `Produto #${item.productId}`;
+    const quantity = Number(item.quantity) || 0;
+    return `${name} x${quantity}`;
+  });
+  return names.length ? names.join(", ") : "N/A";
+}
+
+function exportSalesReport(period) {
+  if (!isAdmin()) {
+    toast("Acesso restrito ao administrador.");
+    return;
+  }
+  const report = getReportPeriod(period);
+  const sales = state.data.sales
+    .filter((item) => {
+      const timestamp = Number(item.sale?.timestamp) || 0;
+      return !item.sale?.isCancelled && timestamp >= report.startTime && timestamp < report.endTime;
+    })
+    .sort((a, b) => (Number(a.sale?.timestamp) || 0) - (Number(b.sale?.timestamp) || 0));
+
+  const rows = sales.map((item) => ({
+    id: `#${item.sale?.id ?? "-"}`,
+    date: item.sale?.timestamp ? dateTime.format(new Date(item.sale.timestamp)) : "-",
+    products: saleProductNames(item),
+    amount: money.format(Number(item.sale?.finalAmount) || 0),
+  }));
+  const totalAmount = sales.reduce((sum, item) => sum + (Number(item.sale?.finalAmount) || 0), 0);
+  const pdf = createSalesReportPdf(report.title, `Data: ${dateTime.format(new Date())}`, rows, money.format(totalAmount));
+  downloadBlob(pdf, report.filename, "application/pdf");
+  toast("Relatorio exportado.");
+}
+
+function normalizePdfText(value) {
+  return String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\x20-\x7E]/g, "")
+    .replace(/[\\()]/g, "\\$&");
+}
+
+function wrapPdfText(value, size) {
+  const words = normalizePdfText(value).split(/\s+/).filter(Boolean);
+  const lines = [];
+  let line = "";
+  words.forEach((word) => {
+    const next = line ? `${line} ${word}` : word;
+    if (next.length > size && line) {
+      lines.push(line);
+      line = word;
+    } else {
+      line = next;
+    }
+  });
+  if (line) lines.push(line);
+  return lines.length ? lines : ["-"];
+}
+
+function pdfTextLine(x, y, size, text, bold = false) {
+  return `BT /${bold ? "F2" : "F1"} ${size} Tf ${x} ${y} Td (${normalizePdfText(text)}) Tj ET`;
+}
+
+function createSalesReportPdf(title, generatedAt, rows, totalText) {
+  const width = 595;
+  const height = 842;
+  const pages = [];
+  let lines = [pdfTextLine(40, 802, 18, title, true), pdfTextLine(40, 770, 10, generatedAt)];
+  let y = 730;
+
+  const addHeader = () => {
+    lines.push(pdfTextLine(40, y, 12, "ID", true));
+    lines.push(pdfTextLine(80, y, 12, "Data", true));
+    lines.push(pdfTextLine(180, y, 12, "Produtos", true));
+    lines.push(pdfTextLine(480, y, 12, "Valor", true));
+    lines.push(`40 ${y - 8} m 555 ${y - 8} l S`);
+    y -= 25;
+  };
+  const newPage = () => {
+    pages.push(lines.join("\n"));
+    lines = [];
+    y = 802;
+    addHeader();
+  };
+
+  addHeader();
+  if (!rows.length) {
+    lines.push(pdfTextLine(40, y, 10, "Nenhuma venda encontrada neste periodo."));
+    y -= 22;
+  }
+  rows.forEach((row) => {
+    const productLines = wrapPdfText(row.products, 46);
+    const rowHeight = Math.max(22, productLines.length * 14 + 8);
+    if (y - rowHeight < 55) newPage();
+    lines.push(pdfTextLine(40, y, 10, row.id));
+    lines.push(pdfTextLine(80, y, 10, row.date));
+    productLines.forEach((line, index) => {
+      lines.push(pdfTextLine(180, y - index * 14, 10, line));
+    });
+    lines.push(pdfTextLine(480, y, 10, row.amount));
+    y -= rowHeight;
+  });
+  if (y < 70) newPage();
+  lines.push(`40 ${y} m 555 ${y} l S`);
+  y -= 22;
+  lines.push(pdfTextLine(380, y, 12, "TOTAL GERAL:", true));
+  lines.push(pdfTextLine(480, y, 12, totalText, true));
+  pages.push(lines.join("\n"));
+
+  return buildPdf(pages, width, height);
+}
+
+function buildPdf(pageContents, width, height) {
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    `<< /Type /Pages /Kids [${pageContents.map((_, index) => `${5 + index * 2} 0 R`).join(" ")}] /Count ${pageContents.length} >>`,
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>",
+  ];
+  pageContents.forEach((content, index) => {
+    const pageId = 5 + index * 2;
+    const contentId = pageId + 1;
+    objects.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${width} ${height}] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${contentId} 0 R >>`);
+    objects.push(`<< /Length ${content.length} >>\nstream\n${content}\nendstream`);
+  });
+
+  let output = "%PDF-1.4\n";
+  const offsets = [0];
+  objects.forEach((object, index) => {
+    offsets.push(output.length);
+    output += `${index + 1} 0 obj\n${object}\nendobj\n`;
+  });
+  const xrefOffset = output.length;
+  output += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  offsets.slice(1).forEach((offset) => {
+    output += `${String(offset).padStart(10, "0")} 00000 n \n`;
+  });
+  output += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
+  return new Blob([output], { type: "application/pdf" });
+}
+
+function downloadBlob(blob, filename, type) {
+  const url = URL.createObjectURL(blob instanceof Blob ? blob : new Blob([blob], { type }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function openRegisterModal() {

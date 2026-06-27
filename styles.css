@@ -17,12 +17,21 @@
   box-sizing: border-box;
 }
 
+html,
+body,
+#app {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
 body {
   margin: 0;
   min-height: 100vh;
   background: var(--background);
   color: var(--text);
   font-family: Inter, Arial, sans-serif;
+  overflow-x: hidden;
 }
 
 body.dark {
@@ -192,9 +201,13 @@ button {
   min-height: 100vh;
   display: grid;
   grid-template-columns: 248px minmax(0, 1fr);
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
 }
 
 .sidebar {
+  min-width: 0;
   position: sticky;
   top: 0;
   height: 100vh;
@@ -227,6 +240,8 @@ button {
 .nav {
   display: grid;
   gap: 4px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .nav button {
@@ -249,6 +264,7 @@ button {
 }
 
 .sidebar-footer {
+  min-width: 0;
   margin-top: auto;
   display: grid;
   gap: 10px;
@@ -256,6 +272,7 @@ button {
 }
 
 .user-pill {
+  min-width: 0;
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 10px;
@@ -270,6 +287,7 @@ button {
 }
 
 .sync-pill {
+  min-width: 0;
   min-height: 34px;
   display: flex;
   align-items: center;
@@ -303,6 +321,8 @@ button {
 
 .main {
   min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
   padding: 22px;
 }
 
@@ -322,6 +342,7 @@ button {
 .section {
   display: grid;
   gap: 16px;
+  min-width: 0;
 }
 
 .notice {
@@ -345,6 +366,7 @@ button {
 }
 
 .toolbar {
+  min-width: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -380,6 +402,59 @@ button {
   color: var(--muted);
 }
 
+.report-export {
+  display: grid;
+  gap: 16px;
+}
+
+.report-action {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.report-action h2 {
+  margin: 0 0 4px;
+}
+
+.report-action p {
+  margin: 0;
+}
+
+.report-icon {
+  width: 52px;
+  height: 52px;
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 8px;
+  background: #fde9ea;
+  color: var(--danger);
+}
+
+.report-icon .material-symbols-rounded {
+  font-size: 30px;
+}
+
+.report-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, auto));
+  align-items: end;
+  justify-content: start;
+  gap: 10px;
+}
+
+.report-filter,
+.report-month,
+.date-filter {
+  min-width: min(260px, 100%);
+}
+
+.filters-toolbar {
+  align-items: end;
+  justify-content: flex-start;
+}
+
 body.dark .sidebar,
 body.dark .panel,
 body.dark .modal,
@@ -398,6 +473,7 @@ body.dark .settings-row {
 .grid {
   display: grid;
   gap: 16px;
+  min-width: 0;
 }
 
 .grid.cols-2 {
@@ -410,6 +486,7 @@ body.dark .settings-row {
 
 .panel,
 .card {
+  min-width: 0;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface);
@@ -454,8 +531,24 @@ body.dark .settings-row {
   font-weight: 700;
 }
 
+.dashboard-metrics {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.dashboard-content {
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 1fr);
+  align-items: start;
+}
+
+.dashboard-content .panel {
+  min-width: 0;
+}
+
 .table-wrap {
+  width: 100%;
+  max-width: 100%;
   overflow: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 table {
@@ -539,6 +632,7 @@ tr:last-child td {
 .product-row,
 .cart-row,
 .transaction-row {
+  min-width: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
@@ -581,6 +675,7 @@ body.dark .transaction-row .amount.minus {
 }
 
 .row-actions {
+  min-width: 0;
   display: flex;
   align-items: center;
   justify-content: flex-end;
@@ -717,17 +812,80 @@ body.dark .transaction-row .amount.minus {
   }
 
   .sidebar {
-    position: static;
+    position: sticky;
+    top: 0;
+    z-index: 10;
     height: auto;
+    gap: 10px;
+    max-width: 100vw;
+    overflow-x: hidden;
+  }
+
+  .brand {
+    padding: 2px 4px 8px;
+  }
+
+  .brand img {
+    width: 34px;
+    height: 34px;
   }
 
   .nav {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    max-width: 100%;
+    padding-bottom: 4px;
+    scrollbar-width: none;
+  }
+
+  .nav::-webkit-scrollbar {
+    display: none;
+  }
+
+  .nav button {
+    flex: 0 0 auto;
+    min-width: 132px;
+    justify-content: center;
+    white-space: nowrap;
+  }
+
+  .sidebar-footer {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+    align-items: stretch;
+    margin-top: 0;
+    padding-top: 2px;
+    max-width: 100%;
+  }
+
+  .sync-pill,
+  .user-pill,
+  .sidebar-footer .btn {
+    min-width: 0;
+    min-height: 40px;
+  }
+
+  .sync-pill,
+  .user-pill {
+    overflow-wrap: anywhere;
+  }
+
+  .sidebar-footer .btn {
+    padding: 0 12px;
   }
 
   .grid.cols-2,
   .grid.cols-3,
+  .report-options,
   .pos-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-metrics {
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  }
+
+  .dashboard-content {
     grid-template-columns: 1fr;
   }
 
@@ -735,23 +893,341 @@ body.dark .transaction-row .amount.minus {
     border-left: 0;
     border-top: 1px solid var(--line);
   }
+
+  .pos-products,
+  .pos-cart {
+    min-height: auto;
+  }
+
+  .settings-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .dashboard-metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-content .panel {
+    overflow: hidden;
+  }
 }
 
 @media (max-width: 620px) {
+  .login-shell {
+    align-items: start;
+    padding: 28px 18px;
+  }
+
+  .login-logo {
+    width: 126px;
+    height: 126px;
+  }
+
+  .login-title {
+    margin-bottom: 18px;
+    font-size: 24px;
+  }
+
+  .input-wrap {
+    min-height: 48px;
+    border-radius: 10px;
+  }
+
+  .btn {
+    width: 100%;
+    min-height: 46px;
+  }
+
+  .app-shell {
+    min-height: auto;
+  }
+
+  .sidebar {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    padding: 10px 10px 8px;
+  }
+
+  .brand strong {
+    font-size: 15px;
+  }
+
+  .nav button {
+    min-width: 96px;
+    min-height: 40px;
+    gap: 6px;
+    padding: 0 10px;
+    font-size: 13px;
+  }
+
+  .nav button .material-symbols-rounded {
+    font-size: 19px;
+  }
+
+  .sidebar-footer {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .sidebar-footer .sync-pill {
+    display: none;
+  }
+
+  .sidebar-footer .user-pill {
+    min-height: 38px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 7px 10px;
+  }
+
+  .sidebar-footer .user-pill strong {
+    display: inline;
+    margin-right: 6px;
+    font-size: 13px;
+  }
+
+  .sidebar-footer .btn {
+    width: auto;
+    min-height: 38px;
+    padding: 0 14px;
+    white-space: nowrap;
+  }
+
   .main {
-    padding: 14px;
+    width: 100%;
+    max-width: 100vw;
+    padding: 14px 10px 22px;
   }
 
   .topbar {
     align-items: flex-start;
     flex-direction: column;
+    gap: 10px;
+    margin-bottom: 12px;
   }
 
-  .nav {
+  .topbar h1 {
+    font-size: 24px;
+  }
+
+  .topbar > div,
+  .topbar .btn {
+    width: 100%;
+  }
+
+  .section,
+  .grid {
+    gap: 12px;
+  }
+
+  .panel {
+    padding: 12px;
+  }
+
+  .panel h2,
+  .panel h3 {
+    margin-top: 0;
+  }
+
+  .metric {
+    min-height: 104px;
+  }
+
+  .metric strong {
+    font-size: 25px;
+    overflow-wrap: anywhere;
+  }
+
+  .metric small {
+    font-size: 12px;
+  }
+
+  .toolbar {
+    align-items: stretch;
+  }
+
+  .toolbar > *,
+  .toolbar > div,
+  .search {
+    width: 100%;
+  }
+
+  .toolbar > div {
+    display: grid;
+    gap: 8px;
+  }
+
+  .table-wrap {
+    margin: 0;
+    border-radius: 8px;
+  }
+
+  table {
+    min-width: 0;
+    table-layout: fixed;
+  }
+
+  th,
+  td {
+    padding: 10px;
+    font-size: 13px;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .product-row,
+  .cart-row,
+  .transaction-row {
     grid-template-columns: 1fr;
+    align-items: stretch;
+    gap: 10px;
+    padding: 11px;
+  }
+
+  .product-row {
+    text-align: left;
+  }
+
+  .row-actions {
+    justify-content: space-between;
+  }
+
+  .transaction-row .row-actions {
+    width: 100%;
+  }
+
+  .row-actions .amount {
+    margin-right: auto;
+  }
+
+  .amount {
+    max-width: 100%;
+  }
+
+  .cart-row .row-actions {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .cart-row .icon-btn {
+    width: 100%;
+    background: var(--accent-soft);
+    color: var(--primary);
+  }
+
+  .qty-field {
+    width: 100%;
+  }
+
+  .qty-field input {
+    flex: 1;
+    width: auto;
+  }
+
+  .pos-products,
+  .pos-cart {
+    padding: 10px;
+  }
+
+  .cart-total {
+    position: static;
+    gap: 10px;
+  }
+
+  .total-line {
+    font-size: 18px;
+  }
+
+  .settings-row {
+    min-height: 66px;
+    align-items: flex-start;
+  }
+
+  .report-action {
+    align-items: flex-start;
+  }
+
+  .report-icon {
+    width: 44px;
+    height: 44px;
+  }
+
+  .report-options {
+    grid-template-columns: 1fr;
+  }
+
+  .filters-toolbar .btn {
+    width: 100%;
   }
 
   .form-grid {
     grid-template-columns: 1fr;
+  }
+
+  .modal-backdrop {
+    align-items: end;
+    padding: 0;
+  }
+
+  .modal {
+    width: 100%;
+    max-height: 92vh;
+    border-radius: 12px 12px 0 0;
+  }
+
+  .modal header,
+  .modal footer {
+    padding: 14px;
+  }
+
+  .modal footer {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .toast {
+    right: 10px;
+    bottom: 10px;
+    max-width: calc(100vw - 20px);
+  }
+}
+
+@media (max-width: 380px) {
+  .main {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+
+  .panel {
+    padding: 10px;
+  }
+
+  .metric {
+    min-height: 94px;
+  }
+
+  .metric span {
+    font-size: 13px;
+  }
+
+  .metric strong {
+    font-size: 22px;
+  }
+
+  .metric small,
+  .muted {
+    font-size: 12px;
+  }
+
+  .transaction-row strong {
+    overflow-wrap: anywhere;
+  }
+
+  .amount {
+    overflow-wrap: anywhere;
   }
 }
