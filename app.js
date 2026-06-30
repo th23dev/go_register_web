@@ -433,7 +433,7 @@ function renderTopActions() {
   if (state.view === "stockHistory") return `<button class="btn" data-action="stock-adjust">${icon("tune")} Ajustar Estoque</button>`;
   if (state.view === "categories") return `<button class="btn" data-action="category-new">${icon("add")} Categoria</button>`;
   if (state.view === "suppliers") return `<button class="btn" data-action="supplier-new">${icon("add")} Fornecedor</button>`;
-  if (state.view === "users" && state.user.role === "ADMIN") return `<button class="btn" data-action="user-new">${icon("add")} Usuario</button>`;
+  if (state.view === "users" && isAdmin()) return `<button class="btn" data-action="user-new">${icon("add")} Usuario</button>`;
   return "";
 }
 
@@ -455,8 +455,8 @@ function allTransactions() {
   const saleRows = state.data.sales.map((item) => ({
     id: item.sale?.id,
     kind: "sale",
-    title: "Venda",
-    subtitle: paymentLabels[item.sale?.paymentMethod] || "Pagamento",
+    title: saleTransactionTitle(item),
+    subtitle: `${paymentLabels[item.sale?.paymentMethod] || "Pagamento"} - Venda #${item.sale?.id ?? "-"}`,
     amount: Number(item.sale?.finalAmount) || 0,
     timestamp: Number(item.sale?.timestamp) || 0,
     isCancelled: Boolean(item.sale?.isCancelled),
@@ -486,6 +486,12 @@ function allTransactions() {
     refId: item.id,
   }));
   return [...saleRows, ...entries, ...exits].sort((a, b) => b.timestamp - a.timestamp);
+}
+
+function saleTransactionTitle(record) {
+  const products = saleProductNames(record);
+  if (products && products !== "N/A") return products;
+  return `Venda #${record.sale?.id ?? "-"}`;
 }
 
 function renderDashboard() {
@@ -523,8 +529,8 @@ function renderDashboard() {
       <div class="grid cols-2 dashboard-content">
         <section class="panel">
           <h2>Extrato Recente</h2>
-          <div class="transactions">
-            ${transactions.slice(0, 8).map(renderTransactionRow).join("") || `<p class="muted">Nenhuma transacao registrada.</p>`}
+          <div class="transactions transactions-scroll transactions-scroll--recent">
+            ${transactions.map(renderTransactionRow).join("") || `<p class="muted">Nenhuma transacao registrada.</p>`}
           </div>
         </section>
         <section class="panel">
@@ -546,10 +552,11 @@ function renderDashboard() {
 function renderTransactionRow(item) {
   const sign = item.kind === "exit" ? "-" : "+";
   const klass = item.kind === "exit" ? "minus" : "plus";
+  const cancelledClass = item.isCancelled ? " transaction-row--cancelled" : "";
   return `
-    <div class="transaction-row">
+    <div class="transaction-row${cancelledClass}">
       <div>
-        <strong>${escapeHtml(item.title)} ${item.isCancelled ? `<span class="badge bad">CANCELADA</span>` : ""}</strong>
+        <strong><span class="transaction-title">${escapeHtml(item.title)}</span> ${item.isCancelled ? `<span class="badge bad">CANCELADA</span>` : ""}</strong>
         <div class="muted">${escapeHtml(item.subtitle)} · ${item.timestamp ? dateTime.format(new Date(item.timestamp)) : "-"}</div>
       </div>
       <div class="row-actions">
@@ -695,7 +702,7 @@ function renderCash() {
       </div>
       <div class="panel">
         <div class="toolbar"><h2>Movimentos Financeiros</h2><div><button class="btn secondary" data-action="entry-new">${icon("add")} Entrada</button> <button class="btn secondary" data-action="exit-new">${icon("remove")} Saida</button></div></div>
-        <div class="transactions">${allTransactions().slice(0, 16).map(renderTransactionRow).join("") || `<p class="muted">Sem movimentos.</p>`}</div>
+        <div class="transactions transactions-scroll transactions-scroll--cash">${allTransactions().map(renderTransactionRow).join("") || `<p class="muted">Sem movimentos.</p>`}</div>
       </div>
     </section>
   `;

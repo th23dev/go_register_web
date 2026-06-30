@@ -629,6 +629,46 @@ tr:last-child td {
   gap: 8px;
 }
 
+.transactions-scroll {
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-right: 6px;
+  scrollbar-gutter: stable;
+}
+
+.transactions-scroll--recent {
+  max-height: 430px;
+}
+
+.transactions-scroll--cash {
+  max-height: 620px;
+}
+
+.transactions-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+
+.transactions-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.transactions-scroll::-webkit-scrollbar-thumb {
+  background: #c8d5e6;
+  border-radius: 999px;
+}
+
+.transactions-scroll::-webkit-scrollbar-thumb:hover {
+  background: #9fb4ce;
+}
+
+body.dark .transactions-scroll::-webkit-scrollbar-thumb {
+  background: #2a5c92;
+}
+
+body.dark .transactions-scroll::-webkit-scrollbar-thumb:hover {
+  background: #3b78b6;
+}
+
 .product-row,
 .cart-row,
 .transaction-row {
@@ -643,10 +683,25 @@ tr:last-child td {
   padding: 12px;
 }
 
+.transaction-row--cancelled .transaction-title,
+.transaction-row--cancelled .amount {
+  text-decoration: line-through;
+  text-decoration-thickness: 2px;
+  opacity: 0.68;
+}
+
+.transaction-row--cancelled {
+  background: #f3f6fa;
+}
+
 body.dark .transaction-row {
   border-color: #1f4f86;
   background: #08284a;
   color: #edf7ff;
+}
+
+body.dark .transaction-row--cancelled {
+  background: #071f3a;
 }
 
 body.dark .transaction-row strong {
