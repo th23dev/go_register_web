@@ -67,6 +67,10 @@ const state = {
   lastSync: null,
 };
 
+if (state.session?.user) {
+  state.user = state.session.user;
+}
+
 const navItems = [
   ["dashboard", "Painel", "dashboard", "all"],
   ["pos", "Vendas", "point_of_sale", "all"],
@@ -93,6 +97,11 @@ const transactionKindLabels = {
   sale: "Venda",
   entry: "Entrada",
   exit: "Saida",
+};
+
+const defaultAdmin = {
+  username: "admin",
+  password: "admin",
 };
 
 const stockTypeLabels = {
@@ -250,11 +259,11 @@ function getRouteView() {
 }
 
 function isAdmin() {
-  return state.user?.role === "ADMIN" || state.user?.role === "MASTER_ADMIN";
+  return isPrivilegedRole(currentUser()?.role);
 }
 
 function isMasterAdmin() {
-  return state.user?.role === "MASTER_ADMIN";
+  return currentUser()?.role === "MASTER_ADMIN";
 }
 
 function roleLabel(role) {
@@ -267,10 +276,26 @@ function isPrivilegedRole(role) {
   return role === "ADMIN" || role === "MASTER_ADMIN";
 }
 
+function currentUser() {
+  if (!state.user) return null;
+  const fresh = findUserByKey(docKey(state.user)) || findById(state.data.users, state.user.id);
+  return fresh ? safeSessionUser(fresh) : state.user;
+}
+
 function canManageUser(user) {
   if (!user) return false;
-  if (Number(user.id) === Number(state.user?.id)) return true;
+  if (sameUser(user, state.user)) return true;
   return !isPrivilegedRole(user.role) || isMasterAdmin();
+}
+
+function sameUser(left, right) {
+  if (!left || !right) return false;
+  const leftKey = docKey(left);
+  const rightKey = docKey(right);
+  if (leftKey && rightKey && leftKey === rightKey) return true;
+  const leftId = Number(left.id);
+  const rightId = Number(right.id);
+  return Number.isFinite(leftId) && Number.isFinite(rightId) && leftId === rightId;
 }
 
 function canAccess(view) {
@@ -437,15 +462,30 @@ function subscribe() {
 }
 
 function syncSessionUser() {
-  if (!state.session?.userId || !state.session?.sessionToken) return;
-  const user = findById(state.data.users, state.session.userId);
-  if (!user || user.isActive === false || user.sessionToken !== state.session.sessionToken) {
+  if ((!state.session?.userId && !state.session?.userKey) || !state.session?.sessionToken) return;
+  const user = findUserByKey(state.session.userKey) || findById(state.data.users, state.session.userId);
+  if (!user || user.isActive === false) {
     state.user = null;
     state.session = null;
     localStorage.removeItem("goRegisterSession");
     return;
   }
+  const sessionToken = user.sessionToken || state.session.sessionToken || randomToken();
   state.user = safeSessionUser(user);
+  state.session = buildSession(user, sessionToken);
+  localStorage.setItem("goRegisterSession", JSON.stringify(state.session));
+  if (!user.sessionToken) {
+    updateDoc(doc(db, collections.users, docKey(user)), { sessionToken }).catch(() => {});
+  }
+}
+
+function buildSession(user, sessionToken) {
+  return {
+    userId: Number(user?.id) || null,
+    userKey: docKey(user),
+    sessionToken,
+    user: safeSessionUser(user),
+  };
 }
 
 function syncCartProducts() {
@@ -491,25 +531,31 @@ function renderLogin(error = "") {
 
 async function login(username, password) {
   try {
+    const normalizedUsername = String(username || "").trim();
+    const rawPassword = String(password || "");
     const snap = await getDocs(collection(db, collections.users));
     const users = snap.docs.map((item) => ({ ...item.data(), docId: item.id }));
     if (!users.length) {
-      await createFirstMasterAdmin(username, password);
+      await createFirstMasterAdmin(normalizedUsername, rawPassword);
       return;
     }
-    const user = users.find((item) => item.username === username && item.isActive !== false);
-    if (!user || !(await verifyPassword(password, user.passwordHash))) {
+    const user = users.find((item) => item.username === normalizedUsername && item.isActive !== false);
+    if (!user || !(await verifyPassword(rawPassword, user.passwordHash))) {
+      if (isDefaultAdminLogin(normalizedUsername, rawPassword)) {
+        await recoverDefaultMasterAdmin(users);
+        return;
+      }
       renderLogin("Usuario ou senha invalidos");
       return;
     }
     const sessionToken = randomToken();
     const patch = { sessionToken, lastLoginAt: Date.now() };
-    if (!isModernPasswordHash(user.passwordHash)) patch.passwordHash = await hashPassword(password);
+    if (!isModernPasswordHash(user.passwordHash)) patch.passwordHash = await hashPassword(rawPassword);
     if (user.username === "admin" && user.role !== "MASTER_ADMIN") patch.role = "MASTER_ADMIN";
-    await updateDoc(doc(db, collections.users, user.docId), patch);
+    await updateDoc(doc(db, collections.users, docKey(user)), patch);
     const loggedUser = { ...user, ...patch };
     state.user = safeSessionUser(loggedUser);
-    state.session = { userId: Number(loggedUser.id), sessionToken };
+    state.session = buildSession(loggedUser, sessionToken);
     state.firebaseError = "";
     localStorage.setItem("goRegisterSession", JSON.stringify(state.session));
     localStorage.removeItem("goRegisterUser");
@@ -520,9 +566,43 @@ async function login(username, password) {
   }
 }
 
+function isDefaultAdminLogin(username, password) {
+  return username === defaultAdmin.username && password === defaultAdmin.password;
+}
+
+function isAllowedPassword(password) {
+  return String(password || "").length >= 6 || String(password || "") === defaultAdmin.password;
+}
+
+async function recoverDefaultMasterAdmin(users = state.data.users) {
+  const existing = users.find((item) => item.username === defaultAdmin.username);
+  const id = Number(existing?.id) || nextId(users);
+  const sessionToken = randomToken();
+  const user = {
+    ...existing,
+    id,
+    username: defaultAdmin.username,
+    passwordHash: await hashPassword(defaultAdmin.password),
+    role: "MASTER_ADMIN",
+    isActive: true,
+    sessionToken,
+    createdAt: existing?.createdAt || Date.now(),
+    lastLoginAt: Date.now(),
+  };
+  const { docId, ...storedUser } = user;
+  await setDoc(doc(db, collections.users, docKey(existing, id)), storedUser);
+  state.user = safeSessionUser(user);
+  state.session = buildSession({ ...user, docId: docKey(existing, id) }, sessionToken);
+  state.firebaseError = "";
+  localStorage.setItem("goRegisterSession", JSON.stringify(state.session));
+  localStorage.removeItem("goRegisterUser");
+  renderApp();
+}
+
 async function createFirstMasterAdmin(username, password) {
   const normalizedUsername = String(username || "").trim();
-  if (normalizedUsername.length < 3 || String(password || "").length < 6) {
+  const rawPassword = String(password || "");
+  if (normalizedUsername.length < 3 || !isAllowedPassword(rawPassword)) {
     renderLogin("Primeiro acesso: informe usuario com 3+ caracteres e senha com 6+ caracteres.");
     return;
   }
@@ -530,7 +610,7 @@ async function createFirstMasterAdmin(username, password) {
   const user = {
     id: 1,
     username: normalizedUsername,
-    passwordHash: await hashPassword(password),
+    passwordHash: await hashPassword(rawPassword),
     role: "MASTER_ADMIN",
     isActive: true,
     sessionToken,
@@ -539,7 +619,7 @@ async function createFirstMasterAdmin(username, password) {
   };
   await setDoc(doc(db, collections.users, "1"), user);
   state.user = safeSessionUser(user);
-  state.session = { userId: 1, sessionToken };
+  state.session = buildSession({ ...user, docId: "1" }, sessionToken);
   state.firebaseError = "";
   localStorage.setItem("goRegisterSession", JSON.stringify(state.session));
   localStorage.removeItem("goRegisterUser");
@@ -670,7 +750,7 @@ function allTransactions() {
       timestamp: saleTimestamp(item),
       isCancelled: saleIsCancelled(item),
       method: paymentMethodValue(item),
-      refId: saleId,
+      refId: docKey(item, saleId),
     };
   });
   const entries = state.data.entries.map((item) => ({
@@ -682,7 +762,7 @@ function allTransactions() {
     timestamp: Number(item.timestamp) || 0,
     isCancelled: Boolean(item.isCancelled),
     method: item.paymentMethod,
-    refId: item.id,
+    refId: docKey(item, item.id),
   }));
   const exits = state.data.exits.map((item) => ({
     id: item.id,
@@ -693,7 +773,7 @@ function allTransactions() {
     timestamp: Number(item.timestamp) || 0,
     isCancelled: Boolean(item.isCancelled),
     method: item.paymentMethod,
-    refId: item.id,
+    refId: docKey(item, item.id),
   }));
   return [...saleRows, ...entries, ...exits].sort((a, b) => b.timestamp - a.timestamp);
 }
@@ -1009,16 +1089,17 @@ function renderUsers() {
   return tableSection("genericSearch", ["Usuario", "Perfil", "Status", ""], state.data.users
     .filter((item) => item.username.toLowerCase().includes(state.search.toLowerCase()))
     .map((item) => {
-      const isSelf = Number(item.id) === Number(state.user.id);
+      const isSelf = sameUser(item, state.user);
       const canManage = canManageUser(item);
+      const userKey = escapeHtml(docKey(item));
       return `<tr>
         <td><strong>${escapeHtml(item.username)}</strong>${isSelf ? ` <span class="badge">VOCE</span>` : ""}</td>
         <td>${escapeHtml(roleLabel(item.role))}</td>
         <td><span class="badge ${item.isActive === false ? "bad" : "good"}">${item.isActive === false ? "Inativo" : "Ativo"}</span></td>
         <td>
-          ${canManage ? `<button class="icon-btn" data-password-user="${item.id}" title="Alterar senha">${icon("lock")}</button>` : ""}
-          ${canManage ? `<button class="icon-btn" data-edit-user="${item.id}" title="Editar">${icon("edit")}</button>` : ""}
-          ${!isSelf && canManage ? `<button class="icon-btn" data-toggle-user="${item.id}" title="Ativar/Inativar">${icon("toggle_on")}</button><button class="icon-btn" data-delete-user="${item.id}" title="Excluir">${icon("delete")}</button>` : ""}
+          ${canManage ? `<button class="icon-btn" data-password-user="${userKey}" title="Alterar senha">${icon("lock")}</button>` : ""}
+          ${canManage ? `<button class="icon-btn" data-edit-user="${userKey}" title="Editar">${icon("edit")}</button>` : ""}
+          ${!isSelf && canManage ? `<button class="icon-btn" data-toggle-user="${userKey}" title="Ativar/Inativar">${icon("toggle_on")}</button><button class="icon-btn" data-delete-user="${userKey}" title="Excluir">${icon("delete")}</button>` : ""}
         </td>
       </tr>`;
     }).join(""));
@@ -1324,14 +1405,22 @@ function bindCrudButtons() {
   document.querySelectorAll("[data-delete-category]").forEach((button) => button.addEventListener("click", () => removeDoc(collections.categories, button.dataset.deleteCategory)));
   document.querySelectorAll("[data-edit-supplier]").forEach((button) => button.addEventListener("click", () => openSupplierModal(findById(state.data.suppliers, button.dataset.editSupplier))));
   document.querySelectorAll("[data-delete-supplier]").forEach((button) => button.addEventListener("click", () => removeDoc(collections.suppliers, button.dataset.deleteSupplier)));
-  document.querySelectorAll("[data-edit-user]").forEach((button) => button.addEventListener("click", () => openUserModal(findById(state.data.users, button.dataset.editUser))));
-  document.querySelectorAll("[data-delete-user]").forEach((button) => button.addEventListener("click", () => deleteUser(Number(button.dataset.deleteUser))));
-  document.querySelectorAll("[data-toggle-user]").forEach((button) => button.addEventListener("click", () => toggleUser(Number(button.dataset.toggleUser))));
-  document.querySelectorAll("[data-password-user]").forEach((button) => button.addEventListener("click", () => changeUserPassword(Number(button.dataset.passwordUser))));
+  document.querySelectorAll("[data-edit-user]").forEach((button) => button.addEventListener("click", () => openUserModal(findUserByKey(button.dataset.editUser))));
+  document.querySelectorAll("[data-delete-user]").forEach((button) => button.addEventListener("click", () => deleteUser(button.dataset.deleteUser)));
+  document.querySelectorAll("[data-toggle-user]").forEach((button) => button.addEventListener("click", () => toggleUser(button.dataset.toggleUser)));
+  document.querySelectorAll("[data-password-user]").forEach((button) => button.addEventListener("click", () => changeUserPassword(button.dataset.passwordUser)));
 }
 
 function findById(items, id) {
   return items.find((item) => Number(item.id) === Number(id));
+}
+
+function docKey(item, fallbackId = null) {
+  return String(item?.docId ?? item?.id ?? fallbackId ?? "");
+}
+
+function findUserByKey(key) {
+  return state.data.users.find((item) => docKey(item) === String(key) || String(item.id ?? "") === String(key));
 }
 
 async function removeDoc(collectionName, id) {
@@ -1538,8 +1627,8 @@ function openUserModal(item = null) {
     const username = String(form.get("username") || "").trim();
     if (username.length < 3) throw new Error("Informe um usuario com pelo menos 3 caracteres.");
     const password = String(form.get("password") || "");
-    if (!item && password.length < 6) throw new Error("Informe uma senha com pelo menos 6 caracteres.");
-    await setDoc(doc(db, collections.users, String(id)), {
+    if (!item && !isAllowedPassword(password)) throw new Error("Informe uma senha com pelo menos 6 caracteres, ou use a senha padrao admin.");
+    await setDoc(doc(db, collections.users, docKey(item, id)), {
       id,
       username,
       passwordHash: item ? item.passwordHash : await hashPassword(password),
@@ -1552,20 +1641,20 @@ function openUserModal(item = null) {
   });
 }
 
-async function changeUserPassword(userId) {
+async function changeUserPassword(userKey) {
   if (!isAdmin()) return toast("Acesso restrito ao administrador.");
-  const user = findById(state.data.users, userId);
-  if (!user) return;
+  const user = findUserByKey(userKey);
+  if (!user) return toast("Usuario nao encontrado.");
   if (!canManageUser(user)) return toast("Apenas o administrador mestre pode alterar senha de administradores.");
   const password = prompt(`Nova senha para ${user.username}:`);
   if (!password) return;
-  if (password.length < 6) return toast("A senha deve ter pelo menos 6 caracteres.");
+  if (!isAllowedPassword(password)) return toast("A senha deve ter pelo menos 6 caracteres, ou use admin.");
   const sessionToken = randomToken();
   await runAction(
     async () => {
-      await updateDoc(doc(db, collections.users, String(userId)), { passwordHash: await hashPassword(password), sessionToken });
-      if (Number(userId) === Number(state.user.id)) {
-        state.session = { userId: Number(userId), sessionToken };
+      await updateDoc(doc(db, collections.users, docKey(user, userKey)), { passwordHash: await hashPassword(password), sessionToken });
+      if (sameUser(user, state.user)) {
+        state.session = buildSession({ ...user, docId: docKey(user, userKey), sessionToken }, sessionToken);
         localStorage.setItem("goRegisterSession", JSON.stringify(state.session));
       }
     },
@@ -1573,24 +1662,29 @@ async function changeUserPassword(userId) {
   );
 }
 
-async function toggleUser(userId) {
+async function toggleUser(userKey) {
   if (!isAdmin()) return toast("Acesso restrito ao administrador.");
-  if (Number(userId) === Number(state.user.id)) return toast("Voce nao pode inativar seu proprio usuario.");
-  const user = findById(state.data.users, userId);
-  if (!user) return;
+  const user = findUserByKey(userKey);
+  if (!user) return toast("Usuario nao encontrado.");
+  if (sameUser(user, state.user)) return toast("Voce nao pode inativar seu proprio usuario.");
   if (!canManageUser(user)) return toast("Apenas o administrador mestre pode alterar status de administradores.");
   await runAction(
-    () => updateDoc(doc(db, collections.users, String(userId)), { isActive: user.isActive === false }),
+    () => updateDoc(doc(db, collections.users, docKey(user, userKey)), { isActive: user.isActive === false }),
     user.isActive === false ? "Usuario ativado." : "Usuario inativado."
   );
 }
 
-async function deleteUser(userId) {
+async function deleteUser(userKey) {
   if (!isAdmin()) return toast("Acesso restrito ao administrador.");
-  if (Number(userId) === Number(state.user.id)) return toast("Voce nao pode excluir seu proprio usuario.");
-  const user = findById(state.data.users, userId);
+  const user = findUserByKey(userKey);
+  if (!user) return toast("Usuario nao encontrado.");
+  if (sameUser(user, state.user)) return toast("Voce nao pode excluir seu proprio usuario.");
   if (!canManageUser(user)) return toast("Apenas o administrador mestre pode excluir administradores.");
-  await removeDoc(collections.users, userId);
+  if (!confirm("Excluir este registro?")) return;
+  await runAction(
+    () => deleteDoc(doc(db, collections.users, docKey(user, userKey))),
+    "Registro excluido."
+  );
 }
 
 function monthNames() {
@@ -1975,23 +2069,28 @@ async function cancelTransaction(kind, id) {
   if (!(await requestAdminAuthorization())) return;
   await runAction(async () => {
     if (kind === "sale") {
-      const record = state.data.sales.find((item) => String(saleData(item).id ?? item.docId) === String(id));
+      const record = state.data.sales.find((item) => String(docKey(item, saleData(item).id)) === String(id) || String(saleData(item).id ?? "") === String(id));
       if (!record) throw new Error("Venda nao encontrada.");
-      await updateDoc(doc(db, collections.sales, String(id)), { "sale.isCancelled": true });
+      const saleId = saleData(record).id ?? id;
+      await updateDoc(doc(db, collections.sales, docKey(record, id)), { "sale.isCancelled": true, isCancelled: true });
       await Promise.all(saleItems(record).map(async (item) => {
         const productId = item.productId ?? item.product_id;
         const product = findById(state.data.products, productId);
         if (!product) return;
         const restored = (Number(product.stockQuantity) || 0) + (Number(item.quantity) || 0);
         await updateProductStock(product.id, restored);
-        await saveStockMovement(product.id, Number(item.quantity) || 0, "ENTRY", `Cancelamento venda #${id}`);
+        await saveStockMovement(product.id, Number(item.quantity) || 0, "ENTRY", `Cancelamento venda #${saleId}`);
       }));
     }
     if (kind === "entry") {
-      await updateDoc(doc(db, collections.entries, String(id)), { isCancelled: true });
+      const record = state.data.entries.find((item) => String(docKey(item, item.id)) === String(id) || String(item.id ?? "") === String(id));
+      if (!record) throw new Error("Entrada nao encontrada.");
+      await updateDoc(doc(db, collections.entries, docKey(record, id)), { isCancelled: true });
     }
     if (kind === "exit") {
-      await updateDoc(doc(db, collections.exits, String(id)), { isCancelled: true });
+      const record = state.data.exits.find((item) => String(docKey(item, item.id)) === String(id) || String(item.id ?? "") === String(id));
+      if (!record) throw new Error("Saida nao encontrada.");
+      await updateDoc(doc(db, collections.exits, docKey(record, id)), { isCancelled: true });
     }
   }, "Transacao cancelada.");
 }
@@ -2054,9 +2153,9 @@ async function saveStockMovement(productId, quantity, type, reason) {
 async function init() {
   applyTheme();
   state.view = getRouteView();
-  renderLogin();
-  subscribe();
   if (state.user) renderApp();
+  else renderLogin();
+  subscribe();
 }
 
 window.addEventListener("hashchange", () => {
