@@ -19,12 +19,12 @@ Depois acesse:
 http://localhost:5173
 ```
 
-## Login padrao
+## Primeiro acesso
 
-- Admin: `admin` / `admin`
-- Operador: `funcionario` / `123`
+No primeiro acesso, quando a colecao `users` ainda estiver vazia, informe o usuario e a senha desejados na tela de login.
+O site cria esse primeiro usuario como `Administrador Mestre`.
 
-O site cria esses usuarios na colecao `users` do Firestore quando necessario.
+Depois disso, novos usuarios devem ser criados em **Ajustes > Gerenciar Usuarios** por um administrador.
 
 ## Colecoes Firestore usadas
 
@@ -46,7 +46,7 @@ O site cria esses usuarios na colecao `users` do Firestore quando necessario.
 - Aplicar desconto na venda
 - Controlar quantidade no carrinho
 - Baixar estoque automaticamente ao vender
-- Cancelar venda, entrada ou saida com senha `1234`
+- Cancelar venda, entrada ou saida com credenciais de um administrador ativo
 - Devolver estoque automaticamente ao cancelar venda
 - Cadastrar, editar e excluir produtos, categorias e fornecedores
 - Gerenciar usuarios

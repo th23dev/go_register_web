@@ -688,6 +688,60 @@ tr:last-child td {
   max-height: 620px;
 }
 
+.date-divider {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 2px;
+  color: var(--primary);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.date-divider::after {
+  content: "";
+  height: 1px;
+  flex: 1;
+  background: var(--line);
+}
+
+.date-divider span {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 6px 10px;
+  box-shadow: 0 6px 16px rgba(21, 32, 51, 0.06);
+}
+
+.date-divider-row td {
+  border-bottom: 0;
+  padding: 18px 12px 8px;
+  background: var(--surface);
+}
+
+.date-divider-row span {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--primary);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.date-divider-row span::after {
+  content: "";
+  height: 1px;
+  flex: 1;
+  background: var(--line);
+}
+
 .transactions-scroll::-webkit-scrollbar {
   width: 8px;
 }

@@ -37,7 +37,8 @@ const collections = {
 };
 
 const state = {
-  user: JSON.parse(localStorage.getItem("goRegisterUser") || "null"),
+  user: null,
+  session: JSON.parse(localStorage.getItem("goRegisterSession") || "null"),
   view: "dashboard",
   darkTheme: localStorage.getItem("goRegisterDarkTheme") === "true",
   data: {
@@ -109,7 +110,42 @@ function stockTypeLabel(type) {
 }
 
 function saleData(record) {
-  return record?.sale && typeof record.sale === "object" ? record.sale : record || {};
+  return record?.sale && typeof record.sale === "object" ? { ...record, ...record.sale } : record || {};
+}
+
+function normalizeTimestamp(value) {
+  if (!value) return 0;
+  if (typeof value === "number") return value > 0 && value < 100000000000 ? value * 1000 : value;
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === "object") {
+    if (typeof value.toMillis === "function") return value.toMillis();
+    if (typeof value.seconds === "number") return value.seconds * 1000 + Math.floor((Number(value.nanoseconds) || 0) / 1000000);
+    if (typeof value._seconds === "number") return value._seconds * 1000 + Math.floor((Number(value._nanoseconds) || 0) / 1000000);
+  }
+  const parsed = Number(value);
+  if (Number.isFinite(parsed)) return parsed > 0 && parsed < 100000000000 ? parsed * 1000 : parsed;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? 0 : date.getTime();
+}
+
+function saleTimestamp(record) {
+  const sale = saleData(record);
+  return normalizeTimestamp(sale.timestamp ?? sale.createdAt ?? sale.created_at ?? record?.timestamp ?? record?.createdAt ?? record?.created_at);
+}
+
+function saleItems(record) {
+  const sale = saleData(record);
+  return record?.items || sale.items || record?.saleItems || sale.saleItems || record?.sale_items || sale.sale_items || [];
+}
+
+function saleIsCancelled(record) {
+  const sale = saleData(record);
+  return Boolean(sale.isCancelled ?? record?.isCancelled);
+}
+
+function saleAmount(record) {
+  const sale = saleData(record);
+  return Number(sale.finalAmount ?? sale.final_amount ?? sale.totalAmount ?? sale.total_amount ?? sale.amount ?? record?.finalAmount ?? record?.final_amount ?? record?.totalAmount ?? record?.total_amount ?? record?.amount) || 0;
 }
 
 function paymentMethodValue(record) {
@@ -141,6 +177,71 @@ function normalizePaymentMethod(value) {
 function paymentMethodLabel(recordOrMethod) {
   const method = typeof recordOrMethod === "string" ? normalizePaymentMethod(recordOrMethod) : paymentMethodValue(recordOrMethod);
   return paymentLabels[method] || method || "Pagamento";
+}
+
+function safeSessionUser(user) {
+  if (!user) return null;
+  const { passwordHash, sessionToken, ...safeUser } = user;
+  return safeUser;
+}
+
+function randomToken() {
+  const bytes = new Uint8Array(24);
+  crypto.getRandomValues(bytes);
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function bufferToHex(buffer) {
+  return [...new Uint8Array(buffer)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function sha256Hex(text) {
+  const encoded = new TextEncoder().encode(text);
+  return bufferToHex(await crypto.subtle.digest("SHA-256", encoded));
+}
+
+function isModernPasswordHash(value) {
+  return /^sha256\$[a-f0-9]{32,}\$[a-f0-9]{64}$/i.test(String(value || ""));
+}
+
+async function hashPassword(password, salt = randomToken()) {
+  const hash = await sha256Hex(`${salt}:${password}`);
+  return `sha256$${salt}$${hash}`;
+}
+
+async function verifyPassword(password, storedHash) {
+  const value = String(storedHash || "");
+  if (!isModernPasswordHash(value)) return value === String(password || "");
+  const [, salt, expectedHash] = value.split("$");
+  return await sha256Hex(`${salt}:${password}`) === expectedHash;
+}
+
+function dateGroupKey(timestamp) {
+  const value = Number(timestamp) || 0;
+  if (!value) return "no-date";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "no-date";
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function dateGroupLabel(timestamp) {
+  const value = Number(timestamp) || 0;
+  if (!value) return "Sem data";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "Sem data" : dateOnly.format(date);
+}
+
+function renderGroupedByDate(items, renderItem, renderDivider) {
+  let currentDate = "";
+  return items.map((item) => {
+    const key = dateGroupKey(item.timestamp);
+    const divider = key !== currentDate ? renderDivider(dateGroupLabel(item.timestamp)) : "";
+    currentDate = key;
+    return `${divider}${renderItem(item)}`;
+  }).join("");
 }
 
 function getRouteView() {
@@ -193,7 +294,7 @@ function icon(name) {
 }
 
 function nextId(items) {
-  return Math.max(0, ...items.map((item) => Number(item.id) || 0)) + 1;
+  return Math.max(0, ...items.map((item) => Number(item.id ?? item.docId) || 0)) + 1;
 }
 
 function todayBounds(offset = 0) {
@@ -314,37 +415,13 @@ async function runAction(task, successMessage = "") {
   }
 }
 
-async function createInitialUsers() {
-  const snap = await getDocs(collection(db, collections.users));
-  const users = snap.docs.map((item) => ({ ...item.data(), docId: item.id }));
-  const existingAdmin = users.find((user) => user.username === "admin");
-  if (existingAdmin && existingAdmin.role !== "MASTER_ADMIN") {
-    await updateDoc(doc(db, collections.users, existingAdmin.docId), { role: "MASTER_ADMIN" });
-  }
-  if (users.length === 0) {
-    await setDoc(doc(db, collections.users, "1"), {
-      id: 1,
-      username: "admin",
-      passwordHash: "admin",
-      role: "MASTER_ADMIN",
-      isActive: true,
-    });
-    await setDoc(doc(db, collections.users, "2"), {
-      id: 2,
-      username: "funcionario",
-      passwordHash: "123",
-      role: "OPERATOR",
-      isActive: true,
-    });
-  }
-}
-
 function subscribe() {
   Object.entries(collections).forEach(([key, name]) => {
     onSnapshot(query(collection(db, name)), (snapshot) => {
       const dataKey = key === "registers" ? "registers" : key;
       state.data[dataKey] = snapshot.docs.map((item) => ({ ...item.data(), docId: item.id })).sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0));
       if (dataKey === "products") syncCartProducts();
+      if (dataKey === "users") syncSessionUser();
       state.loadedCollections.add(key);
       state.loading = false;
       state.firebaseError = "";
@@ -357,6 +434,18 @@ function subscribe() {
       else renderLogin(state.firebaseError);
     });
   });
+}
+
+function syncSessionUser() {
+  if (!state.session?.userId || !state.session?.sessionToken) return;
+  const user = findById(state.data.users, state.session.userId);
+  if (!user || user.isActive === false || user.sessionToken !== state.session.sessionToken) {
+    state.user = null;
+    state.session = null;
+    localStorage.removeItem("goRegisterSession");
+    return;
+  }
+  state.user = safeSessionUser(user);
 }
 
 function syncCartProducts() {
@@ -402,16 +491,28 @@ function renderLogin(error = "") {
 
 async function login(username, password) {
   try {
-    await createInitialUsers();
     const snap = await getDocs(collection(db, collections.users));
-    const user = snap.docs.map((item) => item.data()).find((item) => item.username === username && item.passwordHash === password && item.isActive !== false);
-    if (!user) {
+    const users = snap.docs.map((item) => ({ ...item.data(), docId: item.id }));
+    if (!users.length) {
+      await createFirstMasterAdmin(username, password);
+      return;
+    }
+    const user = users.find((item) => item.username === username && item.isActive !== false);
+    if (!user || !(await verifyPassword(password, user.passwordHash))) {
       renderLogin("Usuario ou senha invalidos");
       return;
     }
-    state.user = user;
+    const sessionToken = randomToken();
+    const patch = { sessionToken, lastLoginAt: Date.now() };
+    if (!isModernPasswordHash(user.passwordHash)) patch.passwordHash = await hashPassword(password);
+    if (user.username === "admin" && user.role !== "MASTER_ADMIN") patch.role = "MASTER_ADMIN";
+    await updateDoc(doc(db, collections.users, user.docId), patch);
+    const loggedUser = { ...user, ...patch };
+    state.user = safeSessionUser(loggedUser);
+    state.session = { userId: Number(loggedUser.id), sessionToken };
     state.firebaseError = "";
-    localStorage.setItem("goRegisterUser", JSON.stringify(user));
+    localStorage.setItem("goRegisterSession", JSON.stringify(state.session));
+    localStorage.removeItem("goRegisterUser");
     renderApp();
   } catch (error) {
     state.firebaseError = error.message || "Falha ao entrar.";
@@ -419,8 +520,55 @@ async function login(username, password) {
   }
 }
 
+async function createFirstMasterAdmin(username, password) {
+  const normalizedUsername = String(username || "").trim();
+  if (normalizedUsername.length < 3 || String(password || "").length < 6) {
+    renderLogin("Primeiro acesso: informe usuario com 3+ caracteres e senha com 6+ caracteres.");
+    return;
+  }
+  const sessionToken = randomToken();
+  const user = {
+    id: 1,
+    username: normalizedUsername,
+    passwordHash: await hashPassword(password),
+    role: "MASTER_ADMIN",
+    isActive: true,
+    sessionToken,
+    createdAt: Date.now(),
+    lastLoginAt: Date.now(),
+  };
+  await setDoc(doc(db, collections.users, "1"), user);
+  state.user = safeSessionUser(user);
+  state.session = { userId: 1, sessionToken };
+  state.firebaseError = "";
+  localStorage.setItem("goRegisterSession", JSON.stringify(state.session));
+  localStorage.removeItem("goRegisterUser");
+  renderApp();
+}
+
+async function authorizeAdminCredentials(username, password) {
+  const user = state.data.users.find((item) => item.username === username && item.isActive !== false && isPrivilegedRole(item.role));
+  if (!user) {
+    return false;
+  }
+  return await verifyPassword(password, user.passwordHash);
+}
+
+async function requestAdminAuthorization() {
+  const defaultUsername = isAdmin() ? state.user.username : "";
+  const username = prompt("Usuario administrador:", defaultUsername);
+  if (username === null) return false;
+  const password = prompt("Senha do administrador:");
+  if (password === null) return false;
+  const allowed = await authorizeAdminCredentials(username.trim(), password);
+  if (!allowed) toast("Credenciais de administrador invalidas.");
+  return allowed;
+}
+
 function logout() {
   state.user = null;
+  state.session = null;
+  localStorage.removeItem("goRegisterSession");
   localStorage.removeItem("goRegisterUser");
   state.cart = [];
   renderLogin();
@@ -518,9 +666,9 @@ function allTransactions() {
       kind: "sale",
       title: saleTransactionTitle(item),
       subtitle: `${paymentMethodLabel(item)} - Venda #${saleId ?? "-"}`,
-      amount: Number(sale.finalAmount) || 0,
-      timestamp: Number(sale.timestamp) || 0,
-      isCancelled: Boolean(sale.isCancelled),
+      amount: saleAmount(item),
+      timestamp: saleTimestamp(item),
+      isCancelled: saleIsCancelled(item),
       method: paymentMethodValue(item),
       refId: saleId,
     };
@@ -597,7 +745,7 @@ function renderDashboard() {
         <section class="panel">
           <h2>Extrato Recente</h2>
           <div class="transactions transactions-scroll transactions-scroll--recent">
-            ${transactions.map(renderTransactionRow).join("") || `<p class="muted">Nenhuma transacao registrada.</p>`}
+            ${renderGroupedTransactionRows(transactions) || `<p class="muted">Nenhuma transacao registrada.</p>`}
           </div>
         </section>
         <section class="panel">
@@ -632,6 +780,14 @@ function renderTransactionRow(item) {
       </div>
     </div>
   `;
+}
+
+function renderTransactionDateDivider(label) {
+  return `<div class="date-divider"><span>${escapeHtml(label)}</span></div>`;
+}
+
+function renderGroupedTransactionRows(transactions) {
+  return renderGroupedByDate(transactions, renderTransactionRow, renderTransactionDateDivider);
 }
 
 function renderPos() {
@@ -769,7 +925,7 @@ function renderCash() {
       </div>
       <div class="panel">
         <div class="toolbar"><h2>Movimentos Financeiros</h2><div><button class="btn secondary" data-action="entry-new">${icon("add")} Entrada</button> <button class="btn secondary" data-action="exit-new">${icon("remove")} Saida</button></div></div>
-        <div class="transactions transactions-scroll transactions-scroll--cash">${allTransactions().map(renderTransactionRow).join("") || `<p class="muted">Sem movimentos.</p>`}</div>
+        <div class="transactions transactions-scroll transactions-scroll--cash">${renderGroupedTransactionRows(allTransactions()) || `<p class="muted">Sem movimentos.</p>`}</div>
       </div>
     </section>
   `;
@@ -780,9 +936,9 @@ function registerReport(register) {
   const sales = state.data.sales
     .filter((item) => {
       const sale = saleData(item);
-      return Number(sale.cashRegisterId) === registerId && !sale.isCancelled;
+      return Number(sale.cashRegisterId) === registerId && !saleIsCancelled(item);
     })
-    .reduce((sum, item) => sum + (Number(saleData(item).finalAmount) || 0), 0);
+    .reduce((sum, item) => sum + saleAmount(item), 0);
   const entries = state.data.entries
     .filter((item) => Number(item.cashRegisterId) === registerId && !item.isCancelled)
     .reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
@@ -870,8 +1026,7 @@ function renderUsers() {
 
 function reportSales(bounds) {
   return state.data.sales.filter((item) => {
-    const sale = saleData(item);
-    return !sale.isCancelled && inBounds(sale.timestamp, bounds);
+    return !saleIsCancelled(item) && inBounds(saleTimestamp(item), bounds);
   });
 }
 
@@ -891,9 +1046,8 @@ function reportPaymentSummary(sales) {
     other: { label: "Outros", amount: 0, count: 0 },
   };
   sales.forEach((item) => {
-    const sale = saleData(item);
     const key = paymentGroupKey(paymentMethodValue(item));
-    summary[key].amount += Number(sale.finalAmount) || 0;
+    summary[key].amount += saleAmount(item);
     summary[key].count += 1;
   });
   return summary;
@@ -904,15 +1058,16 @@ function reportDetailedSaleItems(sales) {
     const sale = saleData(record);
     const method = paymentMethodValue(record);
     const saleId = sale.id ?? record.docId ?? "-";
-    return (record.items || []).map((item) => {
-      const product = findById(state.data.products, item.productId);
+    return saleItems(record).map((item) => {
+      const productId = item.productId ?? item.product_id;
+      const product = findById(state.data.products, productId);
       const quantity = Number(item.quantity) || 0;
-      const subtotal = Number(item.subtotal) || (Number(item.unitPrice) || 0) * quantity;
+      const subtotal = Number(item.subtotal) || (Number(item.unitPrice ?? item.unit_price) || 0) * quantity;
       return {
         saleId,
-        timestamp: Number(sale.timestamp) || 0,
+        timestamp: saleTimestamp(record),
         quantity,
-        productName: product?.name || item.productName || `Produto #${item.productId}`,
+        productName: product?.name || item.productName || item.product_name || `Produto #${productId}`,
         paymentMethod: method,
         subtotal,
       };
@@ -924,7 +1079,7 @@ function renderReports() {
   const bounds = reportFilterBounds();
   const reportTransactions = allTransactions().filter((item) => inBounds(item.timestamp, bounds));
   const sales = reportSales(bounds);
-  const sold = sales.reduce((sum, item) => sum + (Number(saleData(item).finalAmount) || 0), 0);
+  const sold = sales.reduce((sum, item) => sum + saleAmount(item), 0);
   const exits = state.data.exits
     .filter((item) => !item.isCancelled && inBounds(item.timestamp, bounds))
     .reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
@@ -936,6 +1091,8 @@ function renderReports() {
   const months = monthNames();
   const paymentSummary = reportPaymentSummary(sales);
   const detailedItems = reportDetailedSaleItems(sales);
+  const detailedItemRows = renderGroupedTableRows(detailedItems, 6, renderDetailedSaleItemRow);
+  const reportTransactionRows = renderGroupedTableRows(reportTransactions, 4, renderReportTransactionRow);
   return `
     <section class="section">
       <article class="panel report-export">
@@ -1036,26 +1193,42 @@ function renderReports() {
       <div class="panel table-wrap">
         <h2>Itens Vendidos por Forma de Pagamento</h2>
         <table><thead><tr><th>Venda</th><th>Data</th><th>Quant.</th><th>Produto</th><th>Pagamento</th><th>Valor</th></tr></thead><tbody>
-          ${detailedItems.map((item) => `
-            <tr>
-              <td>#${escapeHtml(item.saleId)}</td>
-              <td>${item.timestamp ? dateOnly.format(new Date(item.timestamp)) : "-"}</td>
-              <td>${formatDecimalInput(item.quantity)}</td>
-              <td>${escapeHtml(item.productName)}</td>
-              <td>${escapeHtml(paymentMethodLabel(item.paymentMethod))}</td>
-              <td>${money.format(item.subtotal)}</td>
-            </tr>
-          `).join("") || `<tr><td colspan="6">Sem itens vendidos neste periodo.</td></tr>`}
+          ${detailedItemRows || `<tr><td colspan="6">Sem itens vendidos neste periodo.</td></tr>`}
         </tbody></table>
       </div>
       <div class="panel table-wrap">
         <h2>Movimentacoes do Periodo</h2>
         <table><thead><tr><th>Data</th><th>Tipo</th><th>Descricao</th><th>Valor</th></tr></thead><tbody>
-          ${reportTransactions.map((item) => `<tr><td>${item.timestamp ? dateOnly.format(new Date(item.timestamp)) : "-"}</td><td>${escapeHtml(transactionKindLabel(item.kind))}</td><td>${escapeHtml(item.title)}</td><td>${money.format(item.amount)}</td></tr>`).join("") || `<tr><td colspan="4">Sem dados.</td></tr>`}
+          ${reportTransactionRows || `<tr><td colspan="4">Sem dados.</td></tr>`}
         </tbody></table>
       </div>
     </section>
   `;
+}
+
+function renderTableDateDivider(label, colspan) {
+  return `<tr class="date-divider-row"><td colspan="${colspan}"><span>${escapeHtml(label)}</span></td></tr>`;
+}
+
+function renderGroupedTableRows(items, colspan, renderRow) {
+  return renderGroupedByDate(items, renderRow, (label) => renderTableDateDivider(label, colspan));
+}
+
+function renderDetailedSaleItemRow(item) {
+  return `
+    <tr>
+      <td>#${escapeHtml(item.saleId)}</td>
+      <td>${item.timestamp ? dateOnly.format(new Date(item.timestamp)) : "-"}</td>
+      <td>${formatDecimalInput(item.quantity)}</td>
+      <td>${escapeHtml(item.productName)}</td>
+      <td>${escapeHtml(paymentMethodLabel(item.paymentMethod))}</td>
+      <td>${money.format(item.subtotal)}</td>
+    </tr>
+  `;
+}
+
+function renderReportTransactionRow(item) {
+  return `<tr><td>${item.timestamp ? dateOnly.format(new Date(item.timestamp)) : "-"}</td><td>${escapeHtml(transactionKindLabel(item.kind))}</td><td>${escapeHtml(item.title)}</td><td>${money.format(item.amount)}</td></tr>`;
 }
 
 function renderSettings() {
@@ -1357,17 +1530,23 @@ function openUserModal(item = null) {
     : [["OPERATOR", "Funcionario"]];
   openModal(item ? "Editar Usuario" : "Novo Usuario", `
     ${input("username", "Usuario", item?.username || "")}
-    ${input("passwordHash", "Senha", item?.passwordHash || "")}
+    ${item ? "" : input("password", "Senha", "", "password")}
     ${select("role", "Perfil", roleOptions, item?.role || "OPERATOR")}
     ${select("isActive", "Status", [["true", "Ativo"], ["false", "Inativo"]], item?.isActive === false ? "false" : "true")}
   `, async (form) => {
     const role = isMasterAdmin() ? form.get("role") : "OPERATOR";
+    const username = String(form.get("username") || "").trim();
+    if (username.length < 3) throw new Error("Informe um usuario com pelo menos 3 caracteres.");
+    const password = String(form.get("password") || "");
+    if (!item && password.length < 6) throw new Error("Informe uma senha com pelo menos 6 caracteres.");
     await setDoc(doc(db, collections.users, String(id)), {
       id,
-      username: form.get("username"),
-      passwordHash: form.get("passwordHash"),
+      username,
+      passwordHash: item ? item.passwordHash : await hashPassword(password),
       role,
       isActive: form.get("isActive") === "true",
+      sessionToken: item?.sessionToken || "",
+      createdAt: item?.createdAt || Date.now(),
     });
     toast("Usuario salvo.");
   });
@@ -1380,8 +1559,16 @@ async function changeUserPassword(userId) {
   if (!canManageUser(user)) return toast("Apenas o administrador mestre pode alterar senha de administradores.");
   const password = prompt(`Nova senha para ${user.username}:`);
   if (!password) return;
+  if (password.length < 6) return toast("A senha deve ter pelo menos 6 caracteres.");
+  const sessionToken = randomToken();
   await runAction(
-    () => updateDoc(doc(db, collections.users, String(userId)), { passwordHash: password }),
+    async () => {
+      await updateDoc(doc(db, collections.users, String(userId)), { passwordHash: await hashPassword(password), sessionToken });
+      if (Number(userId) === Number(state.user.id)) {
+        state.session = { userId: Number(userId), sessionToken };
+        localStorage.setItem("goRegisterSession", JSON.stringify(state.session));
+      }
+    },
     "Senha alterada."
   );
 }
@@ -1461,9 +1648,10 @@ function getReportPeriod(period) {
 }
 
 function saleProductNames(record) {
-  const names = (record.items || []).map((item) => {
-    const product = findById(state.data.products, item.productId);
-    const name = product?.name || `Produto #${item.productId}`;
+  const names = saleItems(record).map((item) => {
+    const productId = item.productId ?? item.product_id;
+    const product = findById(state.data.products, productId);
+    const name = product?.name || item.productName || item.product_name || `Produto #${productId}`;
     const quantity = Number(item.quantity) || 0;
     return `${name} x${quantity}`;
   });
@@ -1478,20 +1666,19 @@ function exportSalesReport(period) {
   const report = getReportPeriod(period);
   const sales = state.data.sales
     .filter((item) => {
-      const sale = saleData(item);
-      const timestamp = Number(sale.timestamp) || 0;
-      return !sale.isCancelled && timestamp >= report.startTime && timestamp < report.endTime;
+      const timestamp = saleTimestamp(item);
+      return !saleIsCancelled(item) && timestamp >= report.startTime && timestamp < report.endTime;
     })
-    .sort((a, b) => (Number(saleData(a).timestamp) || 0) - (Number(saleData(b).timestamp) || 0));
+    .sort((a, b) => saleTimestamp(a) - saleTimestamp(b));
 
   const rows = sales.map((item) => ({
     id: `#${saleData(item).id ?? item.docId ?? "-"}`,
-    date: saleData(item).timestamp ? dateTime.format(new Date(saleData(item).timestamp)) : "-",
+    date: saleTimestamp(item) ? dateTime.format(new Date(saleTimestamp(item))) : "-",
     products: saleProductNames(item),
     payment: paymentMethodLabel(item),
-    amount: money.format(Number(saleData(item).finalAmount) || 0),
+    amount: money.format(saleAmount(item)),
   }));
-  const totalAmount = sales.reduce((sum, item) => sum + (Number(saleData(item).finalAmount) || 0), 0);
+  const totalAmount = sales.reduce((sum, item) => sum + saleAmount(item), 0);
   const pdf = createSalesReportPdf(report.title, `Data: ${dateTime.format(new Date())}`, rows, money.format(totalAmount), reportPaymentSummary(sales));
   downloadBlob(pdf, report.filename, "application/pdf");
   toast("Relatorio exportado.");
@@ -1548,7 +1735,7 @@ function exportBackupJson() {
       cash_registers: state.data.registers,
       financial_entries: state.data.entries,
       financial_exits: state.data.exits,
-      users: state.data.users.map((user) => ({ ...user, passwordHash: user.passwordHash ? "[redacted]" : "" })),
+      users: state.data.users.map((user) => ({ ...user, passwordHash: user.passwordHash ? "[redacted]" : "", sessionToken: user.sessionToken ? "[redacted]" : "" })),
       stock_movements: state.data.stockMovements,
     },
   };
@@ -1785,19 +1972,15 @@ function openCheckoutModal() {
 }
 
 async function cancelTransaction(kind, id) {
-  const password = prompt("Senha do administrador para cancelar:");
-  if (password === null) return;
-  if (password !== "1234") {
-    toast("Senha de administrador incorreta.");
-    return;
-  }
+  if (!(await requestAdminAuthorization())) return;
   await runAction(async () => {
     if (kind === "sale") {
       const record = state.data.sales.find((item) => String(saleData(item).id ?? item.docId) === String(id));
       if (!record) throw new Error("Venda nao encontrada.");
       await updateDoc(doc(db, collections.sales, String(id)), { "sale.isCancelled": true });
-      await Promise.all((record.items || []).map(async (item) => {
-        const product = findById(state.data.products, item.productId);
+      await Promise.all(saleItems(record).map(async (item) => {
+        const productId = item.productId ?? item.product_id;
+        const product = findById(state.data.products, productId);
         if (!product) return;
         const restored = (Number(product.stockQuantity) || 0) + (Number(item.quantity) || 0);
         await updateProductStock(product.id, restored);
@@ -1816,7 +1999,7 @@ async function cancelTransaction(kind, id) {
 async function checkout(paymentMethod) {
   const open = state.data.registers.find((item) => item.isOpen);
   if (!open || !state.cart.length) return;
-  const id = nextId(state.data.sales.map((item) => item.sale || {}));
+  const id = nextId(state.data.sales.map((item) => saleData(item)));
   const total = state.cart.reduce((sum, item) => sum + item.product.sellingPrice * item.quantity, 0);
   const discount = Math.min(Math.max(0, parseDecimal(state.discount)), total);
   const sale = {
