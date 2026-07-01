@@ -432,22 +432,66 @@ button {
   color: var(--danger);
 }
 
+.report-icon--sheet {
+  background: #e5f6ed;
+  color: var(--success);
+}
+
+.report-icon--backup {
+  background: #e8f0ff;
+  color: var(--primary);
+}
+
 .report-icon .material-symbols-rounded {
   font-size: 30px;
 }
 
 .report-options {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, auto));
-  align-items: end;
-  justify-content: start;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.72fr);
+  align-items: start;
+  gap: 18px;
+  padding-top: 2px;
+}
+
+.report-option-group {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.report-group-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.report-filter-grid,
+.report-export-actions {
+  display: grid;
   gap: 10px;
 }
 
+.report-filter-grid {
+  grid-template-columns: minmax(180px, 1fr) minmax(170px, 0.85fr) minmax(180px, 0.9fr);
+}
+
+.report-export-actions {
+  grid-template-columns: repeat(2, minmax(150px, 1fr));
+}
+
+.report-export-actions .btn {
+  width: 100%;
+  min-height: 52px;
+  white-space: nowrap;
+}
+
 .report-filter,
+.report-date,
 .report-month,
 .date-filter {
-  min-width: min(260px, 100%);
+  min-width: 0;
 }
 
 .filters-toolbar {
@@ -936,6 +980,11 @@ body.dark .transaction-row .amount.minus {
     grid-template-columns: 1fr;
   }
 
+  .report-filter-grid,
+  .report-export-actions {
+    grid-template-columns: 1fr;
+  }
+
   .dashboard-metrics {
     grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
   }
@@ -1212,6 +1261,11 @@ body.dark .transaction-row .amount.minus {
   }
 
   .report-options {
+    grid-template-columns: 1fr;
+  }
+
+  .report-filter-grid,
+  .report-export-actions {
     grid-template-columns: 1fr;
   }
 

@@ -56,6 +56,7 @@ const state = {
   filters: {
     cashHistoryDate: "",
     reportsPeriod: "all",
+    reportsDate: new Date().toISOString().slice(0, 10),
     reportsMonth: new Date().getMonth(),
   },
   discount: 0,
@@ -83,8 +84,64 @@ const paymentLabels = {
   CASH: "Dinheiro",
   PIX: "Pix",
   DEBIT_CARD: "Cartao de Debito",
+  CREDIT_CARD: "Cartao de Credito",
   CREDIT_CREDIT: "Cartao de Credito",
 };
+
+const transactionKindLabels = {
+  sale: "Venda",
+  entry: "Entrada",
+  exit: "Saida",
+};
+
+const stockTypeLabels = {
+  ENTRY: "Entrada",
+  EXIT: "Saida",
+  ADJUSTMENT: "Ajuste",
+};
+
+function transactionKindLabel(kind) {
+  return transactionKindLabels[kind] || kind || "-";
+}
+
+function stockTypeLabel(type) {
+  return stockTypeLabels[type] || type || "-";
+}
+
+function saleData(record) {
+  return record?.sale && typeof record.sale === "object" ? record.sale : record || {};
+}
+
+function paymentMethodValue(record) {
+  const sale = saleData(record);
+  const raw = sale.paymentMethod ?? sale.payment_method ?? record?.paymentMethod ?? record?.payment_method ?? record?.method;
+  if (raw && typeof raw === "object") {
+    return normalizePaymentMethod(raw.name ?? raw.value ?? raw.id ?? raw.label ?? "");
+  }
+  return normalizePaymentMethod(raw || "");
+}
+
+function normalizePaymentMethod(value) {
+  const normalized = String(value || "")
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[\s-]+/g, "_")
+    .toUpperCase();
+  const aliases = {
+    DINHEIRO: "CASH",
+    CARTAO_DE_DEBITO: "DEBIT_CARD",
+    CARTAO_DE_CREDITO: "CREDIT_CARD",
+    CREDITO: "CREDIT_CARD",
+    DEBITO: "DEBIT_CARD",
+  };
+  return aliases[normalized] || normalized;
+}
+
+function paymentMethodLabel(recordOrMethod) {
+  const method = typeof recordOrMethod === "string" ? normalizePaymentMethod(recordOrMethod) : paymentMethodValue(recordOrMethod);
+  return paymentLabels[method] || method || "Pagamento";
+}
 
 function getRouteView() {
   const route = window.location.hash.replace(/^#\/?/, "");
@@ -166,6 +223,7 @@ function formatDateInputLabel(value) {
 function reportFilterBounds() {
   const now = new Date();
   if (state.filters.reportsPeriod === "daily") return todayBounds();
+  if (state.filters.reportsPeriod === "specificDate") return dateInputBounds(state.filters.reportsDate) || todayBounds();
   if (state.filters.reportsPeriod === "weekly") {
     const start = new Date(now);
     start.setHours(0, 0, 0, 0);
@@ -285,7 +343,7 @@ function subscribe() {
   Object.entries(collections).forEach(([key, name]) => {
     onSnapshot(query(collection(db, name)), (snapshot) => {
       const dataKey = key === "registers" ? "registers" : key;
-      state.data[dataKey] = snapshot.docs.map((item) => item.data()).sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0));
+      state.data[dataKey] = snapshot.docs.map((item) => ({ ...item.data(), docId: item.id })).sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0));
       if (dataKey === "products") syncCartProducts();
       state.loadedCollections.add(key);
       state.loading = false;
@@ -452,22 +510,26 @@ const views = {
 };
 
 function allTransactions() {
-  const saleRows = state.data.sales.map((item) => ({
-    id: item.sale?.id,
-    kind: "sale",
-    title: saleTransactionTitle(item),
-    subtitle: `${paymentLabels[item.sale?.paymentMethod] || "Pagamento"} - Venda #${item.sale?.id ?? "-"}`,
-    amount: Number(item.sale?.finalAmount) || 0,
-    timestamp: Number(item.sale?.timestamp) || 0,
-    isCancelled: Boolean(item.sale?.isCancelled),
-    method: item.sale?.paymentMethod,
-    refId: item.sale?.id,
-  }));
+  const saleRows = state.data.sales.map((item) => {
+    const sale = saleData(item);
+    const saleId = sale.id ?? item.docId;
+    return {
+      id: saleId,
+      kind: "sale",
+      title: saleTransactionTitle(item),
+      subtitle: `${paymentMethodLabel(item)} - Venda #${saleId ?? "-"}`,
+      amount: Number(sale.finalAmount) || 0,
+      timestamp: Number(sale.timestamp) || 0,
+      isCancelled: Boolean(sale.isCancelled),
+      method: paymentMethodValue(item),
+      refId: saleId,
+    };
+  });
   const entries = state.data.entries.map((item) => ({
     id: item.id,
     kind: "entry",
     title: item.description || "Entrada",
-    subtitle: item.category || paymentLabels[item.paymentMethod] || "Entrada",
+    subtitle: item.category || paymentMethodLabel(item.paymentMethod),
     amount: Number(item.amount) || 0,
     timestamp: Number(item.timestamp) || 0,
     isCancelled: Boolean(item.isCancelled),
@@ -478,7 +540,7 @@ function allTransactions() {
     id: item.id,
     kind: "exit",
     title: item.description || "Saida",
-    subtitle: item.category || paymentLabels[item.paymentMethod] || "Saida",
+    subtitle: item.category || paymentMethodLabel(item.paymentMethod),
     amount: Number(item.amount) || 0,
     timestamp: Number(item.timestamp) || 0,
     isCancelled: Boolean(item.isCancelled),
@@ -491,7 +553,7 @@ function allTransactions() {
 function saleTransactionTitle(record) {
   const products = saleProductNames(record);
   if (products && products !== "N/A") return products;
-  return `Venda #${record.sale?.id ?? "-"}`;
+  return `Venda #${saleData(record).id ?? record?.docId ?? "-"}`;
 }
 
 function renderDashboard() {
@@ -505,7 +567,12 @@ function renderDashboard() {
   const totalToday = netIncome(todayStart, todayEnd);
   const yesterday = netIncome(yesterdayStart, yesterdayEnd);
   const weekly = netIncome(weekStart, todayEnd);
-  const comparison = yesterday === 0 ? (totalToday > 0 ? 100 : 0) : ((totalToday - yesterday) / yesterday) * 100;
+  const todayCents = Math.round(totalToday * 100);
+  const yesterdayCents = Math.round(yesterday * 100);
+  const comparison = yesterdayCents === 0 ? null : ((totalToday - yesterday) / yesterday) * 100;
+  const comparisonText = comparison === null
+    ? (todayCents === 0 ? "Sem variacao em relacao a ontem" : "Sem base de comparacao ontem")
+    : `${comparison >= 0 ? "↑" : "↓"} ${Math.abs(comparison).toFixed(1)}% em relacao a ontem`;
   const todayCount = transactions.filter((item) => !item.isCancelled && item.timestamp >= todayStart && item.timestamp < todayEnd).length;
   const lowStock = state.data.products.filter((item) => Number(item.stockQuantity) <= Number(item.minStockThreshold));
 
@@ -515,7 +582,7 @@ function renderDashboard() {
         <article class="panel metric primary">
           <span>Rendimento do Dia</span>
           <strong>${money.format(totalToday)}</strong>
-          <small>${comparison >= 0 ? "↑" : "↓"} ${Math.abs(comparison).toFixed(1)}% em relacao a ontem</small>
+          <small>${comparisonText}</small>
         </article>
         <article class="panel metric secondary">
           <span>Rendimento Semanal</span>
@@ -655,7 +722,7 @@ function renderStockHistory() {
       <tr>
         <td>${item.timestamp ? dateTime.format(new Date(item.timestamp)) : "-"}</td>
         <td><strong>${escapeHtml(product?.name || `Produto #${item.productId}`)}</strong></td>
-        <td><span class="badge ${item.type === "EXIT" ? "bad" : item.type === "ADJUSTMENT" ? "warn" : "good"}">${escapeHtml(item.type || "-")}</span></td>
+        <td><span class="badge ${item.type === "EXIT" ? "bad" : item.type === "ADJUSTMENT" ? "warn" : "good"}">${escapeHtml(stockTypeLabel(item.type))}</span></td>
         <td><strong class="amount ${qty < 0 ? "minus" : "plus"}">${qty > 0 ? "+" : ""}${qty}</strong></td>
         <td>${escapeHtml(item.reason || "-")}</td>
       </tr>
@@ -711,8 +778,11 @@ function renderCash() {
 function registerReport(register) {
   const registerId = Number(register.id);
   const sales = state.data.sales
-    .filter((item) => Number(item.sale?.cashRegisterId) === registerId && !item.sale?.isCancelled)
-    .reduce((sum, item) => sum + (Number(item.sale?.finalAmount) || 0), 0);
+    .filter((item) => {
+      const sale = saleData(item);
+      return Number(sale.cashRegisterId) === registerId && !sale.isCancelled;
+    })
+    .reduce((sum, item) => sum + (Number(saleData(item).finalAmount) || 0), 0);
   const entries = state.data.entries
     .filter((item) => Number(item.cashRegisterId) === registerId && !item.isCancelled)
     .reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
@@ -798,12 +868,63 @@ function renderUsers() {
     }).join(""));
 }
 
+function reportSales(bounds) {
+  return state.data.sales.filter((item) => {
+    const sale = saleData(item);
+    return !sale.isCancelled && inBounds(sale.timestamp, bounds);
+  });
+}
+
+function paymentGroupKey(method) {
+  const normalized = normalizePaymentMethod(method);
+  if (normalized === "PIX") return "pix";
+  if (normalized === "CASH") return "cash";
+  if (normalized === "DEBIT_CARD" || normalized === "CREDIT_CARD" || normalized === "CREDIT_CREDIT") return "card";
+  return "other";
+}
+
+function reportPaymentSummary(sales) {
+  const summary = {
+    cash: { label: "Dinheiro", amount: 0, count: 0 },
+    card: { label: "Cartao", amount: 0, count: 0 },
+    pix: { label: "Pix", amount: 0, count: 0 },
+    other: { label: "Outros", amount: 0, count: 0 },
+  };
+  sales.forEach((item) => {
+    const sale = saleData(item);
+    const key = paymentGroupKey(paymentMethodValue(item));
+    summary[key].amount += Number(sale.finalAmount) || 0;
+    summary[key].count += 1;
+  });
+  return summary;
+}
+
+function reportDetailedSaleItems(sales) {
+  return sales.flatMap((record) => {
+    const sale = saleData(record);
+    const method = paymentMethodValue(record);
+    const saleId = sale.id ?? record.docId ?? "-";
+    return (record.items || []).map((item) => {
+      const product = findById(state.data.products, item.productId);
+      const quantity = Number(item.quantity) || 0;
+      const subtotal = Number(item.subtotal) || (Number(item.unitPrice) || 0) * quantity;
+      return {
+        saleId,
+        timestamp: Number(sale.timestamp) || 0,
+        quantity,
+        productName: product?.name || item.productName || `Produto #${item.productId}`,
+        paymentMethod: method,
+        subtotal,
+      };
+    });
+  }).sort((a, b) => a.timestamp - b.timestamp);
+}
+
 function renderReports() {
   const bounds = reportFilterBounds();
   const reportTransactions = allTransactions().filter((item) => inBounds(item.timestamp, bounds));
-  const sold = state.data.sales
-    .filter((item) => !item.sale?.isCancelled && inBounds(item.sale?.timestamp, bounds))
-    .reduce((sum, item) => sum + (Number(item.sale?.finalAmount) || 0), 0);
+  const sales = reportSales(bounds);
+  const sold = sales.reduce((sum, item) => sum + (Number(saleData(item).finalAmount) || 0), 0);
   const exits = state.data.exits
     .filter((item) => !item.isCancelled && inBounds(item.timestamp, bounds))
     .reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
@@ -813,6 +934,8 @@ function renderReports() {
   const stockValue = state.data.products.reduce((sum, item) => sum + (Number(item.stockQuantity) || 0) * (Number(item.costPrice) || 0), 0);
   const currentYear = new Date().getFullYear();
   const months = monthNames();
+  const paymentSummary = reportPaymentSummary(sales);
+  const detailedItems = reportDetailedSaleItems(sales);
   return `
     <section class="section">
       <article class="panel report-export">
@@ -824,41 +947,111 @@ function renderReports() {
           </div>
         </div>
         <div class="report-options">
-          <label class="field report-filter">
-            <span>Filtro</span>
-            <span class="input-wrap">
-              ${icon("filter_list")}
-              <select id="reportsPeriod">
-                <option value="all" ${state.filters.reportsPeriod === "all" ? "selected" : ""}>Todos</option>
-                <option value="daily" ${state.filters.reportsPeriod === "daily" ? "selected" : ""}>Hoje</option>
-                <option value="weekly" ${state.filters.reportsPeriod === "weekly" ? "selected" : ""}>Ultimos 7 dias</option>
-                <option value="monthly" ${state.filters.reportsPeriod === "monthly" ? "selected" : ""}>Mensal</option>
-              </select>
-            </span>
-          </label>
-          <label class="field report-month">
-            <span>Mes</span>
-            <span class="input-wrap">
-              ${icon("calendar_month")}
-              <select id="reportMonth">
-                ${months.map((month, index) => `<option value="${index}" ${Number(state.filters.reportsMonth) === index ? "selected" : ""}>${month} ${currentYear}</option>`).join("")}
-              </select>
-            </span>
-          </label>
-          <button class="btn" data-report-period="daily">${icon("today")} Relatorio Diario</button>
-          <button class="btn" data-report-period="weekly">${icon("date_range")} Relatorio Semanal</button>
-          <button class="btn secondary" data-report-period="monthly">${icon("download")} Exportar Mes</button>
+          <div class="report-option-group">
+            <span class="report-group-label">Filtros</span>
+            <div class="report-filter-grid">
+              <label class="field report-filter">
+                <span>Periodo</span>
+                <span class="input-wrap">
+                  ${icon("filter_list")}
+                  <select id="reportsPeriod">
+                    <option value="all" ${state.filters.reportsPeriod === "all" ? "selected" : ""}>Todos</option>
+                    <option value="daily" ${state.filters.reportsPeriod === "daily" ? "selected" : ""}>Hoje</option>
+                    <option value="specificDate" ${state.filters.reportsPeriod === "specificDate" ? "selected" : ""}>Data especifica</option>
+                    <option value="weekly" ${state.filters.reportsPeriod === "weekly" ? "selected" : ""}>Ultimos 7 dias</option>
+                    <option value="monthly" ${state.filters.reportsPeriod === "monthly" ? "selected" : ""}>Mensal</option>
+                  </select>
+                </span>
+              </label>
+              <label class="field report-date">
+                <span>Dia</span>
+                <span class="input-wrap">
+                  ${icon("event")}
+                  <input id="reportDate" type="date" value="${escapeHtml(state.filters.reportsDate)}" />
+                </span>
+              </label>
+              <label class="field report-month">
+                <span>Mes</span>
+                <span class="input-wrap">
+                  ${icon("calendar_month")}
+                  <select id="reportMonth">
+                    ${months.map((month, index) => `<option value="${index}" ${Number(state.filters.reportsMonth) === index ? "selected" : ""}>${month} ${currentYear}</option>`).join("")}
+                  </select>
+                </span>
+              </label>
+            </div>
+          </div>
+          <div class="report-option-group report-option-group--actions">
+            <span class="report-group-label">Exportar PDF</span>
+            <div class="report-export-actions">
+              <button class="btn" data-report-period="daily">${icon("today")} Diario</button>
+              <button class="btn secondary" data-report-period="specificDate">${icon("event")} Dia selecionado</button>
+              <button class="btn" data-report-period="weekly">${icon("date_range")} Semanal</button>
+              <button class="btn secondary" data-report-period="monthly">${icon("download")} Mensal</button>
+            </div>
+          </div>
         </div>
       </article>
+      <div class="grid cols-2">
+        <article class="panel report-export">
+          <div class="report-action">
+            <div class="report-icon report-icon--sheet">${icon("table_view")}</div>
+            <div>
+              <h2>Exportar Inventario</h2>
+              <p class="muted">Baixa uma planilha CSV com produtos, categorias, fornecedores, precos e estoque.</p>
+            </div>
+          </div>
+          <button class="btn secondary" data-action="export-inventory">${icon("download")} Exportar CSV</button>
+        </article>
+        <article class="panel report-export">
+          <div class="report-action">
+            <div class="report-icon report-icon--backup">${icon("database")}</div>
+            <div>
+              <h2>Backup de Dados</h2>
+              <p class="muted">Gera um JSON com as colecoes do sistema sem expor senhas em claro.</p>
+            </div>
+          </div>
+          <button class="btn secondary" data-action="export-backup">${icon("backup")} Baixar Backup</button>
+        </article>
+      </div>
       <div class="grid cols-3">
         <article class="panel metric primary"><span>Vendas Registradas</span><strong>${money.format(sold)}</strong></article>
         <article class="panel metric secondary"><span>Entradas Avulsas</span><strong>${money.format(entries)}</strong></article>
         <article class="panel metric tertiary"><span>Saidas</span><strong>${money.format(exits)}</strong></article>
       </div>
+      <section class="panel">
+        <h2>Resumo por Forma de Pagamento</h2>
+        <div class="grid cols-3">
+          ${["cash", "card", "pix"].map((key) => `
+            <article class="metric compact">
+              <span>${escapeHtml(paymentSummary[key].label)}</span>
+              <strong>${money.format(paymentSummary[key].amount)}</strong>
+              <small>${paymentSummary[key].count} venda${paymentSummary[key].count === 1 ? "" : "s"}</small>
+            </article>
+          `).join("")}
+        </div>
+        ${paymentSummary.other.amount > 0 ? `<p class="muted">Outros pagamentos: ${money.format(paymentSummary.other.amount)} em ${paymentSummary.other.count} venda${paymentSummary.other.count === 1 ? "" : "s"}.</p>` : ""}
+      </section>
       <div class="panel metric"><span>Valor de Custo em Estoque</span><strong>${money.format(stockValue)}</strong></div>
       <div class="panel table-wrap">
+        <h2>Itens Vendidos por Forma de Pagamento</h2>
+        <table><thead><tr><th>Venda</th><th>Data</th><th>Quant.</th><th>Produto</th><th>Pagamento</th><th>Valor</th></tr></thead><tbody>
+          ${detailedItems.map((item) => `
+            <tr>
+              <td>#${escapeHtml(item.saleId)}</td>
+              <td>${item.timestamp ? dateOnly.format(new Date(item.timestamp)) : "-"}</td>
+              <td>${formatDecimalInput(item.quantity)}</td>
+              <td>${escapeHtml(item.productName)}</td>
+              <td>${escapeHtml(paymentMethodLabel(item.paymentMethod))}</td>
+              <td>${money.format(item.subtotal)}</td>
+            </tr>
+          `).join("") || `<tr><td colspan="6">Sem itens vendidos neste periodo.</td></tr>`}
+        </tbody></table>
+      </div>
+      <div class="panel table-wrap">
+        <h2>Movimentacoes do Periodo</h2>
         <table><thead><tr><th>Data</th><th>Tipo</th><th>Descricao</th><th>Valor</th></tr></thead><tbody>
-          ${reportTransactions.map((item) => `<tr><td>${item.timestamp ? dateOnly.format(new Date(item.timestamp)) : "-"}</td><td>${item.kind}</td><td>${escapeHtml(item.title)}</td><td>${money.format(item.amount)}</td></tr>`).join("") || `<tr><td colspan="4">Sem dados.</td></tr>`}
+          ${reportTransactions.map((item) => `<tr><td>${item.timestamp ? dateOnly.format(new Date(item.timestamp)) : "-"}</td><td>${escapeHtml(transactionKindLabel(item.kind))}</td><td>${escapeHtml(item.title)}</td><td>${money.format(item.amount)}</td></tr>`).join("") || `<tr><td colspan="4">Sem dados.</td></tr>`}
         </tbody></table>
       </div>
     </section>
@@ -885,7 +1078,7 @@ function renderSettings() {
           <h2>Gestao do Sistema</h2>
           <div class="settings-grid">
             <button class="settings-row" data-view="users">${icon("manage_accounts")}<span><strong>Gerenciar Usuarios</strong><small>Criar funcionarios, alterar senhas e status</small></span></button>
-            <button class="settings-row" data-view="reports">${icon("monitoring")}<span><strong>Relatorios</strong><small>Resumo financeiro e movimentacoes</small></span></button>
+            <button class="settings-row" data-view="reports">${icon("monitoring")}<span><strong>Relatorios e Exportacao</strong><small>PDF, Excel e backup de dados</small></span></button>
             <button class="settings-row" data-view="cashHistory">${icon("receipt_long")}<span><strong>Historico de Caixa</strong><small>Fechamentos, saldos e diferencas</small></span></button>
             <button class="settings-row" data-view="stockHistory">${icon("history")}<span><strong>Historico de Estoque</strong><small>Entradas, saidas e ajustes</small></span></button>
             <button class="settings-row" data-view="categories">${icon("category")}<span><strong>Categorias</strong><small>Cadastro auxiliar de produtos</small></span></button>
@@ -903,6 +1096,11 @@ function bindViewEvents() {
   document.querySelectorAll("[data-report-period]").forEach((button) => button.addEventListener("click", () => exportSalesReport(button.dataset.reportPeriod)));
   document.querySelector("#reportsPeriod")?.addEventListener("change", (event) => {
     state.filters.reportsPeriod = event.target.value;
+    renderApp();
+  });
+  document.querySelector("#reportDate")?.addEventListener("change", (event) => {
+    state.filters.reportsDate = event.target.value;
+    state.filters.reportsPeriod = "specificDate";
     renderApp();
   });
   document.querySelector("#reportMonth")?.addEventListener("change", (event) => {
@@ -930,7 +1128,7 @@ function bindViewEvents() {
       }
     });
   });
-  document.querySelectorAll("[data-cancel-kind]").forEach((button) => button.addEventListener("click", () => cancelTransaction(button.dataset.cancelKind, Number(button.dataset.cancelId))));
+  document.querySelectorAll("[data-cancel-kind]").forEach((button) => button.addEventListener("click", () => cancelTransaction(button.dataset.cancelKind, button.dataset.cancelId)));
   document.querySelector("#discountInput")?.addEventListener("input", (event) => {
     state.discount = Math.max(0, parseDecimal(event.target.value));
   });
@@ -1050,6 +1248,8 @@ const actions = {
   "cart-clear": () => clearCart(),
   "theme-toggle": () => toggleTheme(),
   "refresh-data": () => renderApp(),
+  "export-inventory": () => exportInventoryCsv(),
+  "export-backup": () => exportBackupJson(),
   "clear-cash-history-filter": () => {
     state.filters.cashHistoryDate = "";
     renderApp();
@@ -1058,7 +1258,7 @@ const actions = {
   checkout: () => openCheckoutModal(),
 };
 
-const adminActions = new Set(["product-new", "category-new", "supplier-new", "user-new", "stock-adjust"]);
+const adminActions = new Set(["product-new", "category-new", "supplier-new", "user-new", "stock-adjust", "export-inventory", "export-backup"]);
 
 function openModal(title, body, onSubmit) {
   document.querySelector("#modalRoot").innerHTML = `
@@ -1153,8 +1353,8 @@ function openUserModal(item = null) {
   if (item && !canManageUser(item)) return toast("Apenas o administrador mestre pode gerenciar outros administradores.");
   const id = item?.id || nextId(state.data.users);
   const roleOptions = isMasterAdmin()
-    ? [["MASTER_ADMIN", "MASTER_ADMIN"], ["ADMIN", "ADMIN"], ["OPERATOR", "OPERATOR"]]
-    : [["OPERATOR", "OPERATOR"]];
+    ? [["MASTER_ADMIN", "Administrador Mestre"], ["ADMIN", "Administrador"], ["OPERATOR", "Funcionario"]]
+    : [["OPERATOR", "Funcionario"]];
   openModal(item ? "Editar Usuario" : "Novo Usuario", `
     ${input("username", "Usuario", item?.username || "")}
     ${input("passwordHash", "Senha", item?.passwordHash || "")}
@@ -1224,6 +1424,17 @@ function getReportPeriod(period) {
       filename: "relatorio_vendas_diario.pdf",
     };
   }
+  if (period === "specificDate") {
+    const selectedDate = state.filters.reportsDate || new Date().toISOString().slice(0, 10);
+    const bounds = dateInputBounds(selectedDate) || todayBounds();
+    const label = formatDateInputLabel(selectedDate) || "Data especifica";
+    return {
+      startTime: bounds[0],
+      endTime: bounds[1],
+      title: `Relatorio de Vendas - ${label}`,
+      filename: `relatorio_vendas_${selectedDate}.pdf`,
+    };
+  }
   if (period === "weekly") {
     const start = new Date(now);
     start.setHours(0, 0, 0, 0);
@@ -1267,21 +1478,86 @@ function exportSalesReport(period) {
   const report = getReportPeriod(period);
   const sales = state.data.sales
     .filter((item) => {
-      const timestamp = Number(item.sale?.timestamp) || 0;
-      return !item.sale?.isCancelled && timestamp >= report.startTime && timestamp < report.endTime;
+      const sale = saleData(item);
+      const timestamp = Number(sale.timestamp) || 0;
+      return !sale.isCancelled && timestamp >= report.startTime && timestamp < report.endTime;
     })
-    .sort((a, b) => (Number(a.sale?.timestamp) || 0) - (Number(b.sale?.timestamp) || 0));
+    .sort((a, b) => (Number(saleData(a).timestamp) || 0) - (Number(saleData(b).timestamp) || 0));
 
   const rows = sales.map((item) => ({
-    id: `#${item.sale?.id ?? "-"}`,
-    date: item.sale?.timestamp ? dateTime.format(new Date(item.sale.timestamp)) : "-",
+    id: `#${saleData(item).id ?? item.docId ?? "-"}`,
+    date: saleData(item).timestamp ? dateTime.format(new Date(saleData(item).timestamp)) : "-",
     products: saleProductNames(item),
-    amount: money.format(Number(item.sale?.finalAmount) || 0),
+    payment: paymentMethodLabel(item),
+    amount: money.format(Number(saleData(item).finalAmount) || 0),
   }));
-  const totalAmount = sales.reduce((sum, item) => sum + (Number(item.sale?.finalAmount) || 0), 0);
-  const pdf = createSalesReportPdf(report.title, `Data: ${dateTime.format(new Date())}`, rows, money.format(totalAmount));
+  const totalAmount = sales.reduce((sum, item) => sum + (Number(saleData(item).finalAmount) || 0), 0);
+  const pdf = createSalesReportPdf(report.title, `Data: ${dateTime.format(new Date())}`, rows, money.format(totalAmount), reportPaymentSummary(sales));
   downloadBlob(pdf, report.filename, "application/pdf");
   toast("Relatorio exportado.");
+}
+
+function csvCell(value) {
+  const text = String(value ?? "");
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
+function exportInventoryCsv() {
+  if (!isAdmin()) {
+    toast("Acesso restrito ao administrador.");
+    return;
+  }
+  const headers = ["ID", "Produto", "Codigo de barras", "Categoria", "Fornecedor", "Preco de custo", "Preco de venda", "Estoque", "Estoque minimo", "Unidade"];
+  const rows = state.data.products
+    .slice()
+    .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "pt-BR"))
+    .map((product) => {
+      const category = findById(state.data.categories, product.categoryId);
+      const supplier = findById(state.data.suppliers, product.supplierId);
+      return [
+        product.id,
+        product.name,
+        product.barcode || "",
+        category?.name || "",
+        supplier?.name || "",
+        Number(product.costPrice) || 0,
+        Number(product.sellingPrice) || 0,
+        Number(product.stockQuantity) || 0,
+        Number(product.minStockThreshold) || 0,
+        product.unit || "UN",
+      ];
+    });
+  const csv = [headers, ...rows].map((row) => row.map(csvCell).join(";")).join("\r\n");
+  downloadBlob(`\uFEFF${csv}`, `inventario_go_register_${dateStamp()}.csv`, "text/csv;charset=utf-8");
+  toast("Inventario exportado.");
+}
+
+function exportBackupJson() {
+  if (!isAdmin()) {
+    toast("Acesso restrito ao administrador.");
+    return;
+  }
+  const backup = {
+    app: "GO REGISTER",
+    exportedAt: new Date().toISOString(),
+    collections: {
+      products: state.data.products,
+      sales: state.data.sales,
+      categories: state.data.categories,
+      suppliers: state.data.suppliers,
+      cash_registers: state.data.registers,
+      financial_entries: state.data.entries,
+      financial_exits: state.data.exits,
+      users: state.data.users.map((user) => ({ ...user, passwordHash: user.passwordHash ? "[redacted]" : "" })),
+      stock_movements: state.data.stockMovements,
+    },
+  };
+  downloadBlob(JSON.stringify(backup, null, 2), `backup_go_register_${dateStamp()}.json`, "application/json");
+  toast("Backup exportado.");
+}
+
+function dateStamp() {
+  return new Date().toISOString().slice(0, 10);
 }
 
 function normalizePdfText(value) {
@@ -1313,7 +1589,7 @@ function pdfTextLine(x, y, size, text, bold = false) {
   return `BT /${bold ? "F2" : "F1"} ${size} Tf ${x} ${y} Td (${normalizePdfText(text)}) Tj ET`;
 }
 
-function createSalesReportPdf(title, generatedAt, rows, totalText) {
+function createSalesReportPdf(title, generatedAt, rows, totalText, paymentSummary = null) {
   const width = 595;
   const height = 842;
   const pages = [];
@@ -1323,7 +1599,8 @@ function createSalesReportPdf(title, generatedAt, rows, totalText) {
   const addHeader = () => {
     lines.push(pdfTextLine(40, y, 12, "ID", true));
     lines.push(pdfTextLine(80, y, 12, "Data", true));
-    lines.push(pdfTextLine(180, y, 12, "Produtos", true));
+    lines.push(pdfTextLine(170, y, 12, "Produtos", true));
+    lines.push(pdfTextLine(390, y, 12, "Pagamento", true));
     lines.push(pdfTextLine(480, y, 12, "Valor", true));
     lines.push(`40 ${y - 8} m 555 ${y - 8} l S`);
     y -= 25;
@@ -1341,21 +1618,38 @@ function createSalesReportPdf(title, generatedAt, rows, totalText) {
     y -= 22;
   }
   rows.forEach((row) => {
-    const productLines = wrapPdfText(row.products, 46);
+    const productLines = wrapPdfText(row.products, 34);
     const rowHeight = Math.max(22, productLines.length * 14 + 8);
     if (y - rowHeight < 55) newPage();
     lines.push(pdfTextLine(40, y, 10, row.id));
     lines.push(pdfTextLine(80, y, 10, row.date));
     productLines.forEach((line, index) => {
-      lines.push(pdfTextLine(180, y - index * 14, 10, line));
+      lines.push(pdfTextLine(170, y - index * 14, 10, line));
     });
+    lines.push(pdfTextLine(390, y, 10, row.payment || "-"));
     lines.push(pdfTextLine(480, y, 10, row.amount));
     y -= rowHeight;
   });
-  if (y < 70) newPage();
+  if (y < 120) newPage();
   lines.push(`40 ${y} m 555 ${y} l S`);
   y -= 22;
-  lines.push(pdfTextLine(380, y, 12, "TOTAL GERAL:", true));
+  if (paymentSummary) {
+    lines.push(pdfTextLine(350, y, 11, "RESUMO FINANCEIRO", true));
+    y -= 18;
+    ["cash", "card", "pix"].forEach((key) => {
+      lines.push(pdfTextLine(350, y, 10, `${paymentSummary[key].label}:`));
+      lines.push(pdfTextLine(480, y, 10, money.format(paymentSummary[key].amount)));
+      y -= 14;
+    });
+    if (paymentSummary.other.amount > 0) {
+      lines.push(pdfTextLine(350, y, 10, "Outros:"));
+      lines.push(pdfTextLine(480, y, 10, money.format(paymentSummary.other.amount)));
+      y -= 14;
+    }
+    lines.push(`350 ${y + 5} m 555 ${y + 5} l S`);
+    y -= 14;
+  }
+  lines.push(pdfTextLine(350, y, 12, "TOTAL GERAL:", true));
   lines.push(pdfTextLine(480, y, 12, totalText, true));
   pages.push(lines.join("\n"));
 
@@ -1499,7 +1793,7 @@ async function cancelTransaction(kind, id) {
   }
   await runAction(async () => {
     if (kind === "sale") {
-      const record = state.data.sales.find((item) => Number(item.sale?.id) === Number(id));
+      const record = state.data.sales.find((item) => String(saleData(item).id ?? item.docId) === String(id));
       if (!record) throw new Error("Venda nao encontrada.");
       await updateDoc(doc(db, collections.sales, String(id)), { "sale.isCancelled": true });
       await Promise.all((record.items || []).map(async (item) => {
