@@ -34,6 +34,7 @@ const collections = {
   exits: "financial_exits",
   users: "users",
   stockMovements: "stock_movements",
+  settings: "settings",
 };
 
 const state = {
@@ -50,7 +51,8 @@ const state = {
     entries: [],
     exits: [],
     users: [],
-  stockMovements: [],
+    stockMovements: [],
+    settings: [],
   },
   cart: [],
   search: "",
@@ -92,6 +94,13 @@ const paymentLabels = {
   CREDIT_CARD: "Cartao de Credito",
   CREDIT_CREDIT: "Cartao de Credito",
 };
+
+const paymentOptions = [
+  ["CASH", paymentLabels.CASH],
+  ["PIX", paymentLabels.PIX],
+  ["DEBIT_CARD", paymentLabels.DEBIT_CARD],
+  ["CREDIT_CARD", paymentLabels.CREDIT_CARD],
+];
 
 const transactionKindLabels = {
   sale: "Venda",
@@ -634,15 +643,53 @@ async function authorizeAdminCredentials(username, password) {
   return await verifyPassword(password, user.passwordHash);
 }
 
-async function requestAdminAuthorization() {
-  const defaultUsername = isAdmin() ? state.user.username : "";
-  const username = prompt("Usuario administrador:", defaultUsername);
-  if (username === null) return false;
-  const password = prompt("Senha do administrador:");
-  if (password === null) return false;
-  const allowed = await authorizeAdminCredentials(username.trim(), password);
-  if (!allowed) toast("Credenciais de administrador invalidas.");
+function appSetting(id) {
+  return state.data.settings.find((item) => docKey(item, item.id) === String(id) || String(item.id ?? "") === String(id));
+}
+
+function cancellationPasswordHash() {
+  return appSetting("cancellation")?.passwordHash || "";
+}
+
+async function verifyCancellationPassword(password) {
+  const storedHash = cancellationPasswordHash();
+  if (!storedHash) return String(password || "") === defaultAdmin.password;
+  return await verifyPassword(password, storedHash);
+}
+
+async function requestCancellationAuthorization() {
+  const form = await openFormDialog("Autorizar Cancelamento", `
+    <p class="muted">Informe a senha de cancelamento para confirmar esta operacao.</p>
+    ${input("password", "Senha de cancelamento", "", "password")}
+  `, "Cancelar transacao", "cancel", "danger");
+  if (!form) return false;
+  const allowed = await verifyCancellationPassword(form.get("password"));
+  if (!allowed) toast("Senha de cancelamento invalida.");
   return allowed;
+}
+
+async function changeCancellationPassword() {
+  if (!isMasterAdmin()) return toast("Apenas o administrador mestre pode alterar a senha de cancelamento.");
+  const form = await openFormDialog("Senha de Cancelamento", `
+    <p class="muted">Essa senha sera solicitada ao cancelar vendas, entradas ou saidas.</p>
+    ${input("password", "Nova senha", "", "password")}
+    ${input("confirmPassword", "Confirmar senha", "", "password")}
+  `, "Alterar senha", "lock");
+  if (!form) return;
+  const password = String(form.get("password") || "");
+  const confirmPassword = String(form.get("confirmPassword") || "");
+  if (!isAllowedPassword(password)) return toast("A senha deve ter pelo menos 6 caracteres, ou use admin.");
+  if (password !== confirmPassword) return toast("As senhas nao conferem.");
+  await runAction(async () => {
+    const setting = {
+      id: "cancellation",
+      passwordHash: await hashPassword(password),
+      updatedAt: Date.now(),
+      updatedBy: Number(currentUser()?.id) || 0,
+    };
+    await setDoc(doc(db, collections.settings, "cancellation"), setting);
+    state.data.settings = [...state.data.settings.filter((item) => docKey(item, item.id) !== "cancellation"), { ...setting, docId: "cancellation" }];
+  }, "Senha de cancelamento alterada.");
 }
 
 function logout() {
@@ -887,7 +934,7 @@ function renderPos() {
           ${filtered.map((product) => {
             const out = Number(product.stockQuantity) <= 0;
             return `
-              <button class="product-row ${out ? "out" : ""}" data-add-cart="${product.id}" ${out ? "disabled" : ""}>
+              <button class="product-row ${out ? "out" : ""}" data-add-cart="${product.id}">
                 <span><strong>${escapeHtml(product.name)}</strong><span class="muted"><br>${money.format(product.sellingPrice || 0)} / ${escapeHtml(product.unit || "UN")} · Estoque: ${Number(product.stockQuantity) || 0}</span></span>
                 ${out ? `<span class="badge bad">ESGOTADO</span>` : icon("add")}
               </button>
@@ -1156,6 +1203,26 @@ function reportDetailedSaleItems(sales) {
   }).sort((a, b) => a.timestamp - b.timestamp);
 }
 
+function reportFinancialMovements(bounds) {
+  const mapMovement = (item, kind) => ({
+    id: item.id,
+    kind,
+    timestamp: Number(item.timestamp) || 0,
+    description: item.description || (kind === "entry" ? "Entrada" : "Saida"),
+    category: item.category || "-",
+    paymentMethod: item.paymentMethod,
+    cashRegisterId: item.cashRegisterId,
+    amount: Number(item.amount) || 0,
+    isCancelled: Boolean(item.isCancelled),
+  });
+  return [
+    ...state.data.entries.map((item) => mapMovement(item, "entry")),
+    ...state.data.exits.map((item) => mapMovement(item, "exit")),
+  ]
+    .filter((item) => inBounds(item.timestamp, bounds))
+    .sort((a, b) => a.timestamp - b.timestamp);
+}
+
 function renderReports() {
   const bounds = reportFilterBounds();
   const reportTransactions = allTransactions().filter((item) => inBounds(item.timestamp, bounds));
@@ -1172,8 +1239,10 @@ function renderReports() {
   const months = monthNames();
   const paymentSummary = reportPaymentSummary(sales);
   const detailedItems = reportDetailedSaleItems(sales);
+  const financialMovements = reportFinancialMovements(bounds);
   const detailedItemRows = renderGroupedTableRows(detailedItems, 6, renderDetailedSaleItemRow);
-  const reportTransactionRows = renderGroupedTableRows(reportTransactions, 4, renderReportTransactionRow);
+  const reportTransactionRows = renderGroupedTableRows(reportTransactions, 6, renderReportTransactionRow);
+  const financialMovementRows = renderGroupedTableRows(financialMovements, 8, renderReportFinancialMovementRow);
   return `
     <section class="section">
       <article class="panel report-export">
@@ -1257,6 +1326,7 @@ function renderReports() {
         <article class="panel metric secondary"><span>Entradas Avulsas</span><strong>${money.format(entries)}</strong></article>
         <article class="panel metric tertiary"><span>Saidas</span><strong>${money.format(exits)}</strong></article>
       </div>
+      <div class="panel metric"><span>Resultado do Periodo</span><strong>${money.format(sold + entries - exits)}</strong></div>
       <section class="panel">
         <h2>Resumo por Forma de Pagamento</h2>
         <div class="grid cols-3">
@@ -1279,8 +1349,14 @@ function renderReports() {
       </div>
       <div class="panel table-wrap">
         <h2>Movimentacoes do Periodo</h2>
-        <table><thead><tr><th>Data</th><th>Tipo</th><th>Descricao</th><th>Valor</th></tr></thead><tbody>
-          ${reportTransactionRows || `<tr><td colspan="4">Sem dados.</td></tr>`}
+        <table><thead><tr><th>Data</th><th>Tipo</th><th>Descricao</th><th>Categoria/Pagamento</th><th>Caixa</th><th>Valor</th></tr></thead><tbody>
+          ${reportTransactionRows || `<tr><td colspan="6">Sem dados.</td></tr>`}
+        </tbody></table>
+      </div>
+      <div class="panel table-wrap">
+        <h2>Detalhes de Entradas e Saidas</h2>
+        <table><thead><tr><th>ID</th><th>Data</th><th>Tipo</th><th>Descricao</th><th>Categoria</th><th>Pagamento</th><th>Caixa</th><th>Valor</th></tr></thead><tbody>
+          ${financialMovementRows || `<tr><td colspan="8">Sem entradas ou saidas neste periodo.</td></tr>`}
         </tbody></table>
       </div>
     </section>
@@ -1309,7 +1385,26 @@ function renderDetailedSaleItemRow(item) {
 }
 
 function renderReportTransactionRow(item) {
-  return `<tr><td>${item.timestamp ? dateOnly.format(new Date(item.timestamp)) : "-"}</td><td>${escapeHtml(transactionKindLabel(item.kind))}</td><td>${escapeHtml(item.title)}</td><td>${money.format(item.amount)}</td></tr>`;
+  const sign = item.kind === "exit" ? -1 : 1;
+  const amountClass = item.kind === "exit" ? "minus" : "plus";
+  return `<tr><td>${item.timestamp ? dateOnly.format(new Date(item.timestamp)) : "-"}</td><td>${escapeHtml(transactionKindLabel(item.kind))}</td><td>${escapeHtml(item.title)}</td><td>${escapeHtml(item.subtitle || "-")}</td><td>${item.id ? `#${escapeHtml(item.id)}` : "-"}</td><td><strong class="amount ${amountClass}">${money.format(sign * item.amount)}</strong></td></tr>`;
+}
+
+function renderReportFinancialMovementRow(item) {
+  const amountClass = item.kind === "exit" ? "minus" : "plus";
+  const sign = item.kind === "exit" ? -1 : 1;
+  return `
+    <tr>
+      <td>#${escapeHtml(item.id)}</td>
+      <td>${item.timestamp ? dateTime.format(new Date(item.timestamp)) : "-"}</td>
+      <td><span class="badge ${item.kind === "exit" ? "bad" : "good"}">${escapeHtml(transactionKindLabel(item.kind))}</span></td>
+      <td>${escapeHtml(item.description)}</td>
+      <td>${escapeHtml(item.category || "-")}</td>
+      <td>${escapeHtml(paymentMethodLabel(item.paymentMethod))}</td>
+      <td>${item.cashRegisterId ? `#${escapeHtml(item.cashRegisterId)}` : "-"}</td>
+      <td><strong class="amount ${amountClass}">${money.format(sign * item.amount)}</strong>${item.isCancelled ? ` <span class="badge bad">CANCELADA</span>` : ""}</td>
+    </tr>
+  `;
 }
 
 function renderSettings() {
@@ -1337,6 +1432,7 @@ function renderSettings() {
             <button class="settings-row" data-view="stockHistory">${icon("history")}<span><strong>Historico de Estoque</strong><small>Entradas, saidas e ajustes</small></span></button>
             <button class="settings-row" data-view="categories">${icon("category")}<span><strong>Categorias</strong><small>Cadastro auxiliar de produtos</small></span></button>
             <button class="settings-row" data-view="suppliers">${icon("local_shipping")}<span><strong>Fornecedores</strong><small>Cadastro auxiliar de produtos</small></span></button>
+            ${isMasterAdmin() ? `<button class="settings-row" data-action="cancel-password">${icon("password")}<span><strong>Senha de Cancelamento</strong><small>Alterar senha usada para cancelar transacoes</small></span></button>` : ""}
           </div>
         </div>
       ` : ""}
@@ -1428,25 +1524,28 @@ async function removeDoc(collectionName, id) {
     toast("Acesso restrito ao administrador.");
     return;
   }
-  if (!confirm("Excluir este registro?")) return;
+  if (!(await openConfirmModal("Excluir Registro", "Tem certeza que deseja excluir este registro?", "Excluir"))) return;
   await runAction(
     () => deleteDoc(doc(db, collectionName, String(id))),
     "Registro excluido."
   );
 }
 
-function addCart(productId) {
+async function addCart(productId) {
   const product = findById(state.data.products, productId);
   if (!product) return;
   const existing = state.cart.find((item) => Number(item.product.id) === Number(productId));
   if (existing) {
     if (existing.quantity + 1 > Number(product.stockQuantity || 0)) {
-      toast("Quantidade maior que o estoque disponivel.");
+      await promptAddStockForProduct(product);
       return;
     }
     existing.quantity += 1;
   } else {
-    if (Number(product.stockQuantity || 0) < 1) return;
+    if (Number(product.stockQuantity || 0) < 1) {
+      await promptAddStockForProduct(product);
+      return;
+    }
     state.cart.push({ product, quantity: 1 });
   }
   renderApp();
@@ -1467,14 +1566,14 @@ function changeCartQty(productId, delta) {
     return;
   }
   if (nextQty > Number(item.product.stockQuantity || 0)) {
-    toast("Quantidade maior que o estoque disponivel.");
+    promptAddStockForProduct(item.product);
     return;
   }
   item.quantity = nextQty;
   renderApp();
 }
 
-function setCartQty(productId, value) {
+async function setCartQty(productId, value) {
   const item = state.cart.find((cartItem) => Number(cartItem.product.id) === Number(productId));
   if (!item) return;
   const nextQty = parseDecimal(value);
@@ -1483,12 +1582,46 @@ function setCartQty(productId, value) {
     return;
   }
   if (nextQty > Number(item.product.stockQuantity || 0)) {
-    toast("Quantidade maior que o estoque disponivel.");
     renderApp();
+    await promptAddStockForProduct(item.product);
     return;
   }
   item.quantity = Math.round(nextQty * 1000) / 1000;
   renderApp();
+}
+
+async function promptAddStockForProduct(product) {
+  const confirmed = await openChoiceModal(
+    "Adicionar ao Estoque?",
+    `Deseja adicionar "${product.name}" ao estoque para vender agora?`
+  );
+  if (!confirmed) return;
+  if (!isAdmin()) {
+    toast("Apenas administradores podem alterar o estoque.");
+    return;
+  }
+  openStockAdjustModal(product);
+}
+
+function productNameExists(name) {
+  const normalized = String(name || "").trim().toLowerCase();
+  if (!normalized) return true;
+  return state.data.products.some((item) => String(item.name || "").trim().toLowerCase() === normalized);
+}
+
+async function promptCreateProductFromManualSale(name) {
+  const productName = String(name || "").trim();
+  if (!productName || productNameExists(productName)) return;
+  const confirmed = await openChoiceModal(
+    "Adicionar ao Estoque?",
+    `Deseja cadastrar "${productName}" como um produto no seu estoque para vendas futuras?`
+  );
+  if (!confirmed) return;
+  if (!isAdmin()) {
+    toast("Apenas administradores podem cadastrar produtos.");
+    return;
+  }
+  openProductModal({ name: productName, stockQuantity: 0, sellingPrice: 0, costPrice: 0 });
 }
 
 function clearCart() {
@@ -1512,6 +1645,7 @@ const actions = {
   "refresh-data": () => renderApp(),
   "export-inventory": () => exportInventoryCsv(),
   "export-backup": () => exportBackupJson(),
+  "cancel-password": () => changeCancellationPassword(),
   "clear-cash-history-filter": () => {
     state.filters.cashHistoryDate = "";
     renderApp();
@@ -1534,16 +1668,87 @@ function openModal(title, body, onSubmit) {
   document.querySelectorAll("[data-close-modal]").forEach((button) => button.addEventListener("click", closeModal));
   document.querySelector("#modalForm").addEventListener("submit", async (event) => {
     event.preventDefault();
-    await runAction(async () => {
-      await onSubmit(new FormData(event.currentTarget));
+    try {
+      const afterSave = await onSubmit(new FormData(event.currentTarget));
+      state.firebaseError = "";
       closeModal();
       renderApp();
-    });
+      if (typeof afterSave === "function") {
+        await afterSave();
+      }
+    } catch (error) {
+      const message = error.message || "Falha ao salvar.";
+      if (/firebase|firestore|permission|network|offline/i.test(message)) {
+        state.firebaseError = message;
+      }
+      toast(message);
+    }
   });
 }
 
 function closeModal() {
   document.querySelector("#modalRoot").innerHTML = "";
+}
+
+function openFormDialog(title, body, submitText = "Salvar", submitIcon = "save", buttonClass = "") {
+  return new Promise((resolve) => {
+    const finish = (value) => {
+      closeModal();
+      resolve(value);
+    };
+    document.querySelector("#modalRoot").innerHTML = `
+      <div class="modal-backdrop">
+        <section class="modal">
+          <header><h2>${title}</h2><button class="icon-btn" type="button" data-dialog-cancel>${icon("close")}</button></header>
+          <form id="dialogForm">
+            ${body}
+            <footer>
+              <button class="btn secondary" type="button" data-dialog-cancel>Cancelar</button>
+              <button class="btn ${buttonClass}" type="submit">${icon(submitIcon)} ${submitText}</button>
+            </footer>
+          </form>
+        </section>
+      </div>
+    `;
+    document.querySelectorAll("[data-dialog-cancel]").forEach((button) => button.addEventListener("click", () => finish(null)));
+    document.querySelector("#dialogForm").addEventListener("submit", (event) => {
+      event.preventDefault();
+      finish(new FormData(event.currentTarget));
+    });
+  });
+}
+
+async function openConfirmModal(title, message, confirmText = "Confirmar") {
+  const form = await openFormDialog(title, `<p class="muted">${escapeHtml(message)}</p>`, confirmText, "check", "danger");
+  return Boolean(form);
+}
+
+function openChoiceModal(title, message, cancelText = "NAO", confirmText = "SIM") {
+  return new Promise((resolve) => {
+    const finish = (value) => {
+      closeModal();
+      resolve(value);
+    };
+    document.querySelector("#modalRoot").innerHTML = `
+      <div class="modal-backdrop">
+        <section class="modal modal-choice">
+          <form id="choiceForm">
+            <h2>${escapeHtml(title)}</h2>
+            <p class="muted">${escapeHtml(message)}</p>
+            <footer>
+              <button class="btn text" type="button" data-choice-cancel>${escapeHtml(cancelText)}</button>
+              <button class="btn" type="submit">${escapeHtml(confirmText)}</button>
+            </footer>
+          </form>
+        </section>
+      </div>
+    `;
+    document.querySelector("[data-choice-cancel]").addEventListener("click", () => finish(false));
+    document.querySelector("#choiceForm").addEventListener("submit", (event) => {
+      event.preventDefault();
+      finish(true);
+    });
+  });
 }
 
 function input(name, label, value = "", type = "text") {
@@ -1557,8 +1762,9 @@ function select(name, label, options, value = "") {
 
 function openProductModal(product = null) {
   if (!isAdmin()) return toast("Acesso restrito ao administrador.");
+  const isEditing = Boolean(product?.id);
   const id = product?.id || nextId(state.data.products);
-  openModal(product ? "Editar Produto" : "Novo Produto", `
+  openModal(isEditing ? "Editar Produto" : "Novo Produto", `
     <div class="form-grid">
       ${input("name", "Nome", product?.name || "")}
       ${input("barcode", "Codigo de barras", product?.barcode || "")}
@@ -1646,7 +1852,12 @@ async function changeUserPassword(userKey) {
   const user = findUserByKey(userKey);
   if (!user) return toast("Usuario nao encontrado.");
   if (!canManageUser(user)) return toast("Apenas o administrador mestre pode alterar senha de administradores.");
-  const password = prompt(`Nova senha para ${user.username}:`);
+  const form = await openFormDialog(`Alterar Senha`, `
+    <p class="muted">Usuario: ${escapeHtml(user.username)}</p>
+    ${input("password", "Nova senha", "", "password")}
+  `, "Alterar senha", "lock");
+  if (!form) return;
+  const password = String(form.get("password") || "");
   if (!password) return;
   if (!isAllowedPassword(password)) return toast("A senha deve ter pelo menos 6 caracteres, ou use admin.");
   const sessionToken = randomToken();
@@ -1680,7 +1891,7 @@ async function deleteUser(userKey) {
   if (!user) return toast("Usuario nao encontrado.");
   if (sameUser(user, state.user)) return toast("Voce nao pode excluir seu proprio usuario.");
   if (!canManageUser(user)) return toast("Apenas o administrador mestre pode excluir administradores.");
-  if (!confirm("Excluir este registro?")) return;
+  if (!(await openConfirmModal("Excluir Usuario", `Tem certeza que deseja excluir ${user.username}?`, "Excluir"))) return;
   await runAction(
     () => deleteDoc(doc(db, collections.users, docKey(user, userKey))),
     "Registro excluido."
@@ -1773,7 +1984,8 @@ function exportSalesReport(period) {
     amount: money.format(saleAmount(item)),
   }));
   const totalAmount = sales.reduce((sum, item) => sum + saleAmount(item), 0);
-  const pdf = createSalesReportPdf(report.title, `Data: ${dateTime.format(new Date())}`, rows, money.format(totalAmount), reportPaymentSummary(sales));
+  const financialMovements = reportFinancialMovements([report.startTime, report.endTime]);
+  const pdf = createSalesReportPdf(report.title, `Data: ${dateTime.format(new Date())}`, rows, money.format(totalAmount), reportPaymentSummary(sales), financialMovements);
   downloadBlob(pdf, report.filename, "application/pdf");
   toast("Relatorio exportado.");
 }
@@ -1831,6 +2043,7 @@ function exportBackupJson() {
       financial_exits: state.data.exits,
       users: state.data.users.map((user) => ({ ...user, passwordHash: user.passwordHash ? "[redacted]" : "", sessionToken: user.sessionToken ? "[redacted]" : "" })),
       stock_movements: state.data.stockMovements,
+      settings: state.data.settings.map((setting) => ({ ...setting, passwordHash: setting.passwordHash ? "[redacted]" : "" })),
     },
   };
   downloadBlob(JSON.stringify(backup, null, 2), `backup_go_register_${dateStamp()}.json`, "application/json");
@@ -1870,7 +2083,7 @@ function pdfTextLine(x, y, size, text, bold = false) {
   return `BT /${bold ? "F2" : "F1"} ${size} Tf ${x} ${y} Td (${normalizePdfText(text)}) Tj ET`;
 }
 
-function createSalesReportPdf(title, generatedAt, rows, totalText, paymentSummary = null) {
+function createSalesReportPdf(title, generatedAt, rows, totalText, paymentSummary = null, financialMovements = []) {
   const width = 595;
   const height = 842;
   const pages = [];
@@ -1891,6 +2104,11 @@ function createSalesReportPdf(title, generatedAt, rows, totalText, paymentSummar
     lines = [];
     y = 802;
     addHeader();
+  };
+  const newPlainPage = () => {
+    pages.push(lines.join("\n"));
+    lines = [pdfTextLine(40, 802, 18, title, true), pdfTextLine(40, 770, 10, generatedAt)];
+    y = 730;
   };
 
   addHeader();
@@ -1932,6 +2150,35 @@ function createSalesReportPdf(title, generatedAt, rows, totalText, paymentSummar
   }
   lines.push(pdfTextLine(350, y, 12, "TOTAL GERAL:", true));
   lines.push(pdfTextLine(480, y, 12, totalText, true));
+  if (financialMovements.length) {
+    newPlainPage();
+    lines.push(pdfTextLine(40, y, 13, "ENTRADAS E SAIDAS DO PERIODO", true));
+    y -= 24;
+    lines.push(pdfTextLine(40, y, 10, "Data", true));
+    lines.push(pdfTextLine(122, y, 10, "Tipo", true));
+    lines.push(pdfTextLine(175, y, 10, "Descricao", true));
+    lines.push(pdfTextLine(340, y, 10, "Categoria", true));
+    lines.push(pdfTextLine(430, y, 10, "Pagamento", true));
+    lines.push(pdfTextLine(510, y, 10, "Valor", true));
+    lines.push(`40 ${y - 8} m 555 ${y - 8} l S`);
+    y -= 24;
+    financialMovements.forEach((item) => {
+      const descLines = wrapPdfText(item.description, 25);
+      const rowHeight = Math.max(22, descLines.length * 13 + 8);
+      if (y - rowHeight < 55) {
+        newPlainPage();
+        lines.push(pdfTextLine(40, y, 13, "ENTRADAS E SAIDAS DO PERIODO", true));
+        y -= 24;
+      }
+      lines.push(pdfTextLine(40, y, 9, item.timestamp ? dateOnly.format(new Date(item.timestamp)) : "-"));
+      lines.push(pdfTextLine(122, y, 9, transactionKindLabel(item.kind)));
+      descLines.forEach((line, index) => lines.push(pdfTextLine(175, y - index * 13, 9, line)));
+      lines.push(pdfTextLine(340, y, 9, item.category || "-"));
+      lines.push(pdfTextLine(430, y, 9, paymentMethodLabel(item.paymentMethod)));
+      lines.push(pdfTextLine(510, y, 9, money.format((item.kind === "exit" ? -1 : 1) * item.amount)));
+      y -= rowHeight;
+    });
+  }
   pages.push(lines.join("\n"));
 
   return buildPdf(pages, width, height);
@@ -1998,8 +2245,9 @@ function openRegisterModal() {
 async function closeRegister() {
   const open = state.data.registers.find((item) => item.isOpen);
   if (!open) return;
-  const closing = prompt("Saldo final do caixa:", String(open.initialBalance || 0));
-  if (closing === null) return;
+  const form = await openFormDialog("Fechar Caixa", input("closingBalance", "Saldo final do caixa", open.initialBalance || 0, "number"), "Fechar caixa", "lock", "danger");
+  if (!form) return;
+  const closing = form.get("closingBalance");
   await runAction(async () => {
     const patch = {
       closingTimestamp: Date.now(),
@@ -2017,17 +2265,18 @@ function openMovementModal(kind) {
   openModal(isEntry ? "Nova Entrada" : "Nova Saida", `
     ${input("description", "Descricao")}
     ${input("amount", "Valor", 0, "number")}
-    ${select("paymentMethod", "Pagamento", Object.entries(paymentLabels), "CASH")}
+    ${select("paymentMethod", "Pagamento", paymentOptions, "CASH")}
     ${input("category", "Categoria")}
   `, async (form) => {
     const list = isEntry ? state.data.entries : state.data.exits;
     const collectionName = isEntry ? collections.entries : collections.exits;
     const open = state.data.registers.find((item) => item.isOpen);
     const id = nextId(list);
+    const description = String(form.get("description") || "").trim();
     await setDoc(doc(db, collectionName, String(id)), {
       id,
       timestamp: Date.now(),
-      description: form.get("description"),
+      description,
       amount: parseDecimal(form.get("amount")),
       paymentMethod: form.get("paymentMethod"),
       category: form.get("category") || null,
@@ -2035,16 +2284,17 @@ function openMovementModal(kind) {
       isCancelled: false,
     });
     toast("Movimento salvo.");
+    if (isEntry) return () => promptCreateProductFromManualSale(description);
   });
 }
 
-function openStockAdjustModal() {
+function openStockAdjustModal(selectedProduct = null) {
   if (!isAdmin()) return toast("Acesso restrito ao administrador.");
   openModal("Ajustar Estoque", `
-    ${select("productId", "Produto", state.data.products.map((item) => [item.id, `${item.name} (${item.stockQuantity} ${item.unit || "UN"})`]), "")}
+    ${select("productId", "Produto", state.data.products.map((item) => [item.id, `${item.name} (${item.stockQuantity} ${item.unit || "UN"})`]), selectedProduct?.id || "")}
     ${select("type", "Tipo", [["ENTRY", "Entrada"], ["EXIT", "Saida"], ["ADJUSTMENT", "Ajuste absoluto"]], "ENTRY")}
     ${input("quantity", "Quantidade", 1, "number")}
-    ${input("reason", "Motivo", "Ajuste manual")}
+    ${input("reason", "Motivo", selectedProduct ? `Entrada para venda de ${selectedProduct.name}` : "Ajuste manual")}
   `, async (form) => {
     const product = findById(state.data.products, form.get("productId"));
     if (!product) throw new Error("Selecione um produto.");
@@ -2060,13 +2310,13 @@ function openStockAdjustModal() {
 }
 
 function openCheckoutModal() {
-  openModal("Forma de Pagamento", select("paymentMethod", "Pagamento", Object.entries(paymentLabels), "CASH"), async (form) => {
+  openModal("Forma de Pagamento", select("paymentMethod", "Pagamento", paymentOptions, "CASH"), async (form) => {
     await checkout(form.get("paymentMethod"));
   });
 }
 
 async function cancelTransaction(kind, id) {
-  if (!(await requestAdminAuthorization())) return;
+  if (!(await requestCancellationAuthorization())) return;
   await runAction(async () => {
     if (kind === "sale") {
       const record = state.data.sales.find((item) => String(docKey(item, saleData(item).id)) === String(id) || String(saleData(item).id ?? "") === String(id));
@@ -2135,7 +2385,11 @@ async function checkout(paymentMethod) {
 }
 
 async function updateProductStock(productId, stockQuantity) {
-  await updateDoc(doc(db, collections.products, String(productId)), { stockQuantity });
+  const product = findById(state.data.products, productId);
+  const productKey = docKey(product, productId);
+  if (!productKey) throw new Error("Produto nao encontrado para atualizar o estoque.");
+  await updateDoc(doc(db, collections.products, productKey), { stockQuantity });
+  state.data.products = state.data.products.map((item) => Number(item.id) === Number(productId) ? { ...item, stockQuantity } : item);
 }
 
 async function saveStockMovement(productId, quantity, type, reason) {

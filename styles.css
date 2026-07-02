@@ -174,6 +174,12 @@ button {
   color: var(--danger);
 }
 
+.btn.text {
+  background: transparent;
+  color: var(--accent);
+  min-width: 72px;
+}
+
 .icon-btn {
   width: 36px;
   height: 36px;
@@ -940,6 +946,36 @@ body.dark .transaction-row .amount.minus {
   padding: 16px;
 }
 
+.modal-choice {
+  width: min(360px, calc(100vw - 36px));
+  border-radius: 18px;
+}
+
+.modal-choice form {
+  gap: 10px;
+  padding: 22px 20px 16px;
+}
+
+.modal-choice h2 {
+  font-size: 18px;
+  text-align: center;
+}
+
+.modal-choice p {
+  margin: 0;
+  text-align: center;
+}
+
+.modal-choice footer {
+  border: 0;
+  padding: 6px 0 0;
+}
+
+.modal-choice .btn {
+  min-height: 38px;
+  border-radius: 999px;
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1342,6 +1378,12 @@ body.dark .transaction-row .amount.minus {
     border-radius: 12px 12px 0 0;
   }
 
+  .modal-choice {
+    width: min(360px, calc(100vw - 36px));
+    border-radius: 18px;
+    align-self: center;
+  }
+
   .modal header,
   .modal footer {
     padding: 14px;
@@ -1350,6 +1392,11 @@ body.dark .transaction-row .amount.minus {
   .modal footer {
     display: grid;
     grid-template-columns: 1fr;
+  }
+
+  .modal-choice footer {
+    display: flex;
+    justify-content: flex-end;
   }
 
   .toast {
