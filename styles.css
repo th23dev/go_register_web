@@ -618,6 +618,178 @@ button {
   min-width: 0;
 }
 
+.report-results {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.9fr) minmax(0, 1.5fr);
+  gap: 16px;
+  align-items: stretch;
+}
+
+.report-result-hero,
+.report-kpi {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.report-result-hero {
+  min-width: 0;
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 18px;
+  overflow: hidden;
+}
+
+.report-result-hero--positive {
+  border-color: #bfe7cb;
+  background: #eefaf2;
+}
+
+.report-result-hero--negative {
+  border-color: #f2c3c6;
+  background: #fff0f1;
+}
+
+.report-result-hero span,
+.report-kpi span,
+.report-payment-card span {
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.report-result-hero strong {
+  display: block;
+  margin: 8px 0 6px;
+  font-size: 34px;
+  line-height: 1.05;
+  overflow-wrap: anywhere;
+}
+
+.report-result-hero small,
+.report-kpi small,
+.report-payment-card small {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.report-result-icon {
+  width: 48px;
+  height: 48px;
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.report-result-icon .material-symbols-rounded {
+  font-size: 30px;
+}
+
+.report-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.report-kpi {
+  display: grid;
+  gap: 7px;
+  padding: 14px;
+  min-width: 0;
+}
+
+.report-kpi strong {
+  font-size: 23px;
+  line-height: 1.12;
+  overflow-wrap: anywhere;
+}
+
+.report-kpi--sales {
+  border-top: 4px solid var(--accent);
+}
+
+.report-kpi--entries {
+  border-top: 4px solid var(--success);
+}
+
+.report-kpi--exits {
+  border-top: 4px solid var(--warning);
+}
+
+.report-kpi--stock {
+  border-top: 4px solid var(--primary);
+}
+
+.report-payment-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.report-section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.report-section-heading h2 {
+  margin: 0 0 4px;
+}
+
+.report-section-heading p {
+  margin: 0;
+}
+
+.report-section-heading > strong {
+  font-size: 24px;
+  white-space: nowrap;
+}
+
+.report-payment-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.report-payment-card {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: #f9fbfd;
+}
+
+.report-payment-card strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 22px;
+  overflow-wrap: anywhere;
+}
+
+.report-payment-track {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e8eef6;
+}
+
+.report-payment-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+}
+
+.report-table {
+  padding-top: 14px;
+}
+
 .filters-toolbar {
   align-items: end;
   justify-content: flex-start;
@@ -630,8 +802,15 @@ body.dark .input-wrap,
 body.dark .pos-cart,
 body.dark .cart-total,
 body.dark .notice,
-body.dark .settings-row {
+body.dark .settings-row,
+body.dark .report-result-hero,
+body.dark .report-kpi,
+body.dark .report-payment-card {
   background: var(--surface);
+}
+
+body.dark .report-payment-track {
+  background: #263244;
 }
 
 .search {
@@ -1183,14 +1362,20 @@ body.dark .transaction-row .amount.minus {
 
   .grid.cols-2,
   .grid.cols-3,
+  .report-results,
   .report-options,
   .pos-layout {
     grid-template-columns: 1fr;
   }
 
   .report-filter-grid,
-  .report-export-actions {
+  .report-export-actions,
+  .report-payment-grid {
     grid-template-columns: 1fr;
+  }
+
+  .report-kpi-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .dashboard-metrics {
@@ -1475,6 +1660,21 @@ body.dark .transaction-row .amount.minus {
   .report-filter-grid,
   .report-export-actions {
     grid-template-columns: 1fr;
+  }
+
+  .report-results,
+  .report-kpi-grid,
+  .report-payment-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .report-result-hero,
+  .report-section-heading {
+    flex-direction: column;
+  }
+
+  .report-section-heading > strong {
+    white-space: normal;
   }
 
   .filters-toolbar .btn {

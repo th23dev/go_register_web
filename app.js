@@ -376,23 +376,29 @@ function formatDateInputLabel(value) {
   return bounds ? dateOnly.format(new Date(bounds[0])) : "";
 }
 
-function reportFilterBounds() {
+function weeklyReportBounds() {
+  const [todayStart, todayEnd] = todayBounds();
+  const start = new Date(todayStart);
+  start.setDate(start.getDate() - 6);
+  return [start.getTime(), todayEnd];
+}
+
+function reportPeriodBounds(period) {
   const now = new Date();
-  if (state.filters.reportsPeriod === "daily") return todayBounds();
-  if (state.filters.reportsPeriod === "specificDate") return dateInputBounds(state.filters.reportsDate) || todayBounds();
-  if (state.filters.reportsPeriod === "weekly") {
-    const start = new Date(now);
-    start.setHours(0, 0, 0, 0);
-    start.setDate(start.getDate() - 7);
-    return [start.getTime(), now.getTime()];
-  }
-  if (state.filters.reportsPeriod === "monthly") {
+  if (period === "daily") return todayBounds();
+  if (period === "specificDate") return dateInputBounds(state.filters.reportsDate) || todayBounds();
+  if (period === "weekly") return weeklyReportBounds();
+  if (period === "monthly") {
     const monthIndex = Number(state.filters.reportsMonth) || 0;
     const start = new Date(now.getFullYear(), monthIndex, 1, 0, 0, 0, 0);
     const end = new Date(now.getFullYear(), monthIndex + 1, 1, 0, 0, 0, 0);
     return [start.getTime(), end.getTime()];
   }
   return null;
+}
+
+function reportFilterBounds() {
+  return reportPeriodBounds(state.filters.reportsPeriod);
 }
 
 function inBounds(timestamp, bounds) {
@@ -1254,6 +1260,55 @@ function reportFinancialMovements(bounds) {
     .sort((a, b) => a.timestamp - b.timestamp);
 }
 
+function reportManualStockEntries(bounds) {
+  return state.data.stockMovements
+    .filter((item) => {
+      const reason = String(item.reason || "");
+      return item.type === "ENTRY"
+        && Number(item.quantity) > 0
+        && !/^Cancelamento venda/i.test(reason)
+        && inBounds(Number(item.timestamp) || 0, bounds);
+    })
+    .map((item) => {
+      const product = findById(state.data.products, item.productId);
+      return {
+        id: item.id,
+        timestamp: Number(item.timestamp) || 0,
+        productName: product?.name || `Produto #${item.productId ?? "-"}`,
+        quantity: Number(item.quantity) || 0,
+        unit: product?.unit || "UN",
+        reason: item.reason || "Entrada manual",
+      };
+    })
+    .sort((a, b) => a.timestamp - b.timestamp);
+}
+
+function reportPeriodLabel(bounds) {
+  if (!bounds) return "Todos os periodos";
+  const [start, end] = bounds;
+  const endDate = new Date(end - 1);
+  const startLabel = dateOnly.format(new Date(start));
+  const endLabel = dateOnly.format(endDate);
+  return startLabel === endLabel ? startLabel : `${startLabel} ate ${endLabel}`;
+}
+
+function reportPaymentCards(paymentSummary, total) {
+  return ["cash", "card", "pix", "other"].map((key) => {
+    const item = paymentSummary[key];
+    const share = total > 0 ? Math.round((item.amount / total) * 100) : 0;
+    return `
+      <article class="report-payment-card">
+        <div>
+          <span>${escapeHtml(item.label)}</span>
+          <strong>${money.format(item.amount)}</strong>
+        </div>
+        <small>${item.count} venda${item.count === 1 ? "" : "s"} - ${share}%</small>
+        <div class="report-payment-track"><span style="width: ${share}%"></span></div>
+      </article>
+    `;
+  }).join("");
+}
+
 function renderReports() {
   const bounds = reportFilterBounds();
   const reportTransactions = allTransactions().filter((item) => inBounds(item.timestamp, bounds));
@@ -1265,15 +1320,24 @@ function renderReports() {
   const entries = state.data.entries
     .filter((item) => !item.isCancelled && inBounds(item.timestamp, bounds))
     .reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+  const result = sold + entries - exits;
   const stockValue = state.data.products.reduce((sum, item) => sum + (Number(item.stockQuantity) || 0) * (Number(item.costPrice) || 0), 0);
   const currentYear = new Date().getFullYear();
   const months = monthNames();
   const paymentSummary = reportPaymentSummary(sales);
   const detailedItems = reportDetailedSaleItems(sales);
   const financialMovements = reportFinancialMovements(bounds);
+  const manualStockEntries = reportManualStockEntries(bounds);
   const detailedItemRows = renderGroupedTableRows(detailedItems, 6, renderDetailedSaleItemRow);
   const reportTransactionRows = renderGroupedTableRows(reportTransactions, 6, renderReportTransactionRow);
   const financialMovementRows = renderGroupedTableRows(financialMovements, 8, renderReportFinancialMovementRow);
+  const manualStockEntryRows = renderGroupedTableRows(manualStockEntries, 5, renderManualStockEntryRow);
+  const resultClass = result < 0 ? "negative" : "positive";
+  const periodLabel = reportPeriodLabel(bounds);
+  const saleCount = sales.length;
+  const itemCount = detailedItems.reduce((sum, item) => sum + (Number(item.quantity) || 0), 0);
+  const entryCount = financialMovements.filter((item) => item.kind === "entry" && !item.isCancelled).length;
+  const exitCount = financialMovements.filter((item) => item.kind === "exit" && !item.isCancelled).length;
   return `
     <section class="section">
       <article class="panel report-export">
@@ -1352,42 +1416,90 @@ function renderReports() {
           <button class="btn secondary" data-action="export-backup">${icon("backup")} Baixar Backup</button>
         </article>
       </div>
-      <div class="grid cols-3">
-        <article class="panel metric primary"><span>Vendas Registradas</span><strong>${money.format(sold)}</strong></article>
-        <article class="panel metric secondary"><span>Entradas Avulsas</span><strong>${money.format(entries)}</strong></article>
-        <article class="panel metric tertiary"><span>Saidas</span><strong>${money.format(exits)}</strong></article>
-      </div>
-      <div class="panel metric"><span>Resultado do Periodo</span><strong>${money.format(sold + entries - exits)}</strong></div>
-      <section class="panel">
-        <h2>Resumo por Forma de Pagamento</h2>
-        <div class="grid cols-3">
-          ${["cash", "card", "pix"].map((key) => `
-            <article class="metric compact">
-              <span>${escapeHtml(paymentSummary[key].label)}</span>
-              <strong>${money.format(paymentSummary[key].amount)}</strong>
-              <small>${paymentSummary[key].count} venda${paymentSummary[key].count === 1 ? "" : "s"}</small>
-            </article>
-          `).join("")}
+      <section class="report-results">
+        <article class="report-result-hero report-result-hero--${resultClass}">
+          <div>
+            <span>Resultado do periodo</span>
+            <strong>${money.format(result)}</strong>
+            <small>${escapeHtml(periodLabel)}</small>
+          </div>
+          <div class="report-result-icon">${icon(result < 0 ? "trending_down" : "trending_up")}</div>
+        </article>
+        <div class="report-kpi-grid">
+          <article class="report-kpi report-kpi--sales">
+            <span>Vendas</span>
+            <strong>${money.format(sold)}</strong>
+            <small>${saleCount} venda${saleCount === 1 ? "" : "s"}</small>
+          </article>
+          <article class="report-kpi report-kpi--entries">
+            <span>Entradas avulsas</span>
+            <strong>${money.format(entries)}</strong>
+            <small>${entryCount} registro${entryCount === 1 ? "" : "s"}</small>
+          </article>
+          <article class="report-kpi report-kpi--exits">
+            <span>Saidas</span>
+            <strong>${money.format(exits)}</strong>
+            <small>${exitCount} registro${exitCount === 1 ? "" : "s"}</small>
+          </article>
+          <article class="report-kpi report-kpi--stock">
+            <span>Custo em estoque</span>
+            <strong>${money.format(stockValue)}</strong>
+            <small>${formatDecimalInput(itemCount)} item${itemCount === 1 ? "" : "s"} vendido${itemCount === 1 ? "" : "s"}</small>
+          </article>
         </div>
-        ${paymentSummary.other.amount > 0 ? `<p class="muted">Outros pagamentos: ${money.format(paymentSummary.other.amount)} em ${paymentSummary.other.count} venda${paymentSummary.other.count === 1 ? "" : "s"}.</p>` : ""}
       </section>
-      <div class="panel metric"><span>Valor de Custo em Estoque</span><strong>${money.format(stockValue)}</strong></div>
-      <div class="panel table-wrap">
-        <h2>Itens Vendidos por Forma de Pagamento</h2>
+      <section class="report-payment-panel">
+        <div class="report-section-heading">
+          <div>
+            <h2>Formas de Pagamento</h2>
+            <p class="muted">Distribuicao das vendas no periodo selecionado.</p>
+          </div>
+          <strong>${money.format(sold)}</strong>
+        </div>
+        <div class="report-payment-grid">${reportPaymentCards(paymentSummary, sold)}</div>
+      </section>
+      <div class="panel table-wrap report-table">
+        <div class="report-section-heading">
+          <div>
+            <h2>Itens Vendidos</h2>
+            <p class="muted">${formatDecimalInput(itemCount)} item${itemCount === 1 ? "" : "s"} vendido${itemCount === 1 ? "" : "s"} no periodo.</p>
+          </div>
+        </div>
         <table><thead><tr><th>Venda</th><th>Data/Hora</th><th>Quant.</th><th>Produto</th><th>Pagamento</th><th>Valor</th></tr></thead><tbody>
           ${detailedItemRows || `<tr><td colspan="6">Sem itens vendidos neste periodo.</td></tr>`}
         </tbody></table>
       </div>
-      <div class="panel table-wrap">
-        <h2>Movimentacoes do Periodo</h2>
+      <div class="panel table-wrap report-table">
+        <div class="report-section-heading">
+          <div>
+            <h2>Movimentacoes do Periodo</h2>
+            <p class="muted">Vendas, entradas e saidas reunidas em ordem de data.</p>
+          </div>
+        </div>
         <table><thead><tr><th>Data/Hora</th><th>Tipo</th><th>Descricao</th><th>Categoria/Pagamento</th><th>Caixa</th><th>Valor</th></tr></thead><tbody>
           ${reportTransactionRows || `<tr><td colspan="6">Sem dados.</td></tr>`}
         </tbody></table>
       </div>
-      <div class="panel table-wrap">
-        <h2>Detalhes de Entradas e Saidas</h2>
+      <div class="panel table-wrap report-table">
+        <div class="report-section-heading">
+          <div>
+            <h2>Entradas e Saidas Financeiras</h2>
+            <p class="muted">Movimentos avulsos que afetam o resultado do caixa.</p>
+          </div>
+        </div>
         <table><thead><tr><th>ID</th><th>Data/Hora</th><th>Tipo</th><th>Descricao</th><th>Categoria</th><th>Pagamento</th><th>Caixa</th><th>Valor</th></tr></thead><tbody>
           ${financialMovementRows || `<tr><td colspan="8">Sem entradas ou saidas neste periodo.</td></tr>`}
+        </tbody></table>
+      </div>
+      <div class="panel table-wrap report-table">
+        <div class="report-section-heading">
+          <div>
+            <h2>Entradas Manuais de Estoque</h2>
+            <p class="muted">Reposicoes de estoque exibidas separadamente do caixa.</p>
+          </div>
+        </div>
+        <table><thead><tr><th>ID</th><th>Data/Hora</th><th>Produto</th><th>Quantidade</th><th>Motivo</th></tr></thead><tbody>
+          ${manualStockEntryRows || `<tr><td colspan="5">Sem entradas manuais de estoque neste periodo.</td></tr>`}
         </tbody></table>
       </div>
     </section>
@@ -1434,6 +1546,18 @@ function renderReportFinancialMovementRow(item) {
       <td>${escapeHtml(paymentMethodLabel(item.paymentMethod))}</td>
       <td>${item.cashRegisterId ? `#${escapeHtml(item.cashRegisterId)}` : "-"}</td>
       <td><strong class="amount ${amountClass}">${money.format(sign * item.amount)}</strong>${item.isCancelled ? ` <span class="badge bad">CANCELADA</span>` : ""}</td>
+    </tr>
+  `;
+}
+
+function renderManualStockEntryRow(item) {
+  return `
+    <tr>
+      <td>#${escapeHtml(item.id)}</td>
+      <td>${item.timestamp ? dateTime.format(new Date(item.timestamp)) : "-"}</td>
+      <td>${escapeHtml(item.productName)}</td>
+      <td><strong class="amount plus">+${formatDecimalInput(item.quantity)} ${escapeHtml(item.unit)}</strong></td>
+      <td>${escapeHtml(item.reason)}</td>
     </tr>
   `;
 }
@@ -1937,21 +2061,17 @@ function monthNames() {
 
 function getReportPeriod(period) {
   const now = new Date();
+  const bounds = reportPeriodBounds(period);
   if (period === "daily") {
-    const start = new Date(now);
-    start.setHours(0, 0, 0, 0);
-    const end = new Date(start);
-    end.setDate(end.getDate() + 1);
     return {
-      startTime: start.getTime(),
-      endTime: end.getTime(),
+      startTime: bounds[0],
+      endTime: bounds[1],
       title: "Relatorio de Vendas - Diario",
       filename: "relatorio_vendas_diario.pdf",
     };
   }
   if (period === "specificDate") {
     const selectedDate = state.filters.reportsDate || new Date().toISOString().slice(0, 10);
-    const bounds = dateInputBounds(selectedDate) || todayBounds();
     const label = formatDateInputLabel(selectedDate) || "Data especifica";
     return {
       startTime: bounds[0],
@@ -1961,12 +2081,9 @@ function getReportPeriod(period) {
     };
   }
   if (period === "weekly") {
-    const start = new Date(now);
-    start.setHours(0, 0, 0, 0);
-    start.setDate(start.getDate() - 7);
     return {
-      startTime: start.getTime(),
-      endTime: now.getTime(),
+      startTime: bounds[0],
+      endTime: bounds[1],
       title: "Relatorio de Vendas - Semanal",
       filename: "relatorio_vendas_semanal.pdf",
     };
@@ -1974,12 +2091,10 @@ function getReportPeriod(period) {
 
   const monthIndex = Number(state.filters.reportsMonth ?? document.querySelector("#reportMonth")?.value ?? now.getMonth());
   const year = now.getFullYear();
-  const start = new Date(year, monthIndex, 1, 0, 0, 0, 0);
-  const end = new Date(year, monthIndex + 1, 1, 0, 0, 0, 0);
   const month = monthNames()[monthIndex];
   return {
-    startTime: start.getTime(),
-    endTime: end.getTime(),
+    startTime: bounds[0],
+    endTime: bounds[1],
     title: `Relatorio de Vendas - ${month} ${year}`,
     filename: `relatorio_vendas_${month.toLowerCase()}.pdf`,
   };
@@ -2018,7 +2133,8 @@ function exportSalesReport(period) {
   }));
   const totalAmount = sales.reduce((sum, item) => sum + saleAmount(item), 0);
   const financialMovements = reportFinancialMovements([report.startTime, report.endTime]);
-  const pdf = createSalesReportPdf(report.title, `Data: ${dateTime.format(new Date())}`, rows, money.format(totalAmount), reportPaymentSummary(sales), financialMovements);
+  const manualStockEntries = reportManualStockEntries([report.startTime, report.endTime]);
+  const pdf = createSalesReportPdf(report.title, `Data: ${dateTime.format(new Date())}`, rows, money.format(totalAmount), reportPaymentSummary(sales), financialMovements, manualStockEntries);
   downloadBlob(pdf, report.filename, "application/pdf");
   toast("Relatorio exportado.");
 }
@@ -2116,7 +2232,7 @@ function pdfTextLine(x, y, size, text, bold = false) {
   return `BT /${bold ? "F2" : "F1"} ${size} Tf ${x} ${y} Td (${normalizePdfText(text)}) Tj ET`;
 }
 
-function createSalesReportPdf(title, generatedAt, rows, totalText, paymentSummary = null, financialMovements = []) {
+function createSalesReportPdf(title, generatedAt, rows, totalText, paymentSummary = null, financialMovements = [], manualStockEntries = []) {
   const width = 595;
   const height = 842;
   const pages = [];
@@ -2209,6 +2325,32 @@ function createSalesReportPdf(title, generatedAt, rows, totalText, paymentSummar
       lines.push(pdfTextLine(340, y, 9, item.category || "-"));
       lines.push(pdfTextLine(430, y, 9, paymentMethodLabel(item.paymentMethod)));
       lines.push(pdfTextLine(510, y, 9, money.format((item.kind === "exit" ? -1 : 1) * item.amount)));
+      y -= rowHeight;
+    });
+  }
+  if (manualStockEntries.length) {
+    newPlainPage();
+    lines.push(pdfTextLine(40, y, 13, "ENTRADAS MANUAIS DE ESTOQUE", true));
+    y -= 24;
+    lines.push(pdfTextLine(40, y, 10, "Data/Hora", true));
+    lines.push(pdfTextLine(130, y, 10, "Produto", true));
+    lines.push(pdfTextLine(300, y, 10, "Quantidade", true));
+    lines.push(pdfTextLine(390, y, 10, "Motivo", true));
+    lines.push(`40 ${y - 8} m 555 ${y - 8} l S`);
+    y -= 24;
+    manualStockEntries.forEach((item) => {
+      const productLines = wrapPdfText(item.productName, 24);
+      const reasonLines = wrapPdfText(item.reason, 24);
+      const rowHeight = Math.max(22, Math.max(productLines.length, reasonLines.length) * 13 + 8);
+      if (y - rowHeight < 55) {
+        newPlainPage();
+        lines.push(pdfTextLine(40, y, 13, "ENTRADAS MANUAIS DE ESTOQUE", true));
+        y -= 24;
+      }
+      lines.push(pdfTextLine(40, y, 9, item.timestamp ? dateTime.format(new Date(item.timestamp)) : "-"));
+      productLines.forEach((line, index) => lines.push(pdfTextLine(130, y - index * 13, 9, line)));
+      lines.push(pdfTextLine(300, y, 9, `+${formatDecimalInput(item.quantity)} ${item.unit}`));
+      reasonLines.forEach((line, index) => lines.push(pdfTextLine(390, y - index * 13, 9, line)));
       y -= rowHeight;
     });
   }
