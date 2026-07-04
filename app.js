@@ -63,6 +63,7 @@ const state = {
   view: "dashboard",
   theme: initialTheme(),
   darkTheme: false,
+  sidebarCollapsed: false,
   data: {
     products: [],
     sales: [],
@@ -216,6 +217,25 @@ function normalizePaymentMethod(value) {
 function paymentMethodLabel(recordOrMethod) {
   const method = typeof recordOrMethod === "string" ? normalizePaymentMethod(recordOrMethod) : paymentMethodValue(recordOrMethod);
   return paymentLabels[method] || method || "Pagamento";
+}
+
+function paymentMethodGroup(recordOrMethod) {
+  const method = typeof recordOrMethod === "string" ? normalizePaymentMethod(recordOrMethod) : paymentMethodValue(recordOrMethod);
+  if (method === "DEBIT_CARD" || method === "CREDIT_CARD" || method === "CREDIT_CREDIT") return "CARD";
+  if (method === "PIX") return "PIX";
+  if (method === "CASH") return "CASH";
+  return method || "OTHER";
+}
+
+function paymentMethodGroupLabel(recordOrMethod) {
+  const group = paymentMethodGroup(recordOrMethod);
+  const labels = {
+    CASH: "Dinheiro",
+    PIX: "Pix",
+    CARD: "Cartao",
+    OTHER: "Outros",
+  };
+  return labels[group] || paymentMethodLabel(recordOrMethod);
 }
 
 function safeSessionUser(user) {
@@ -741,7 +761,7 @@ function logout() {
 function renderApp(focusId = null) {
   enforceAccess();
   root.innerHTML = `
-    <div class="app-shell">
+    <div class="app-shell ${state.sidebarCollapsed ? "sidebar-collapsed" : ""}">
       <aside class="sidebar">
         <div class="brand">
           <img src="./assets/goregisterlogo.png" alt="" />
@@ -788,7 +808,12 @@ function renderView() {
   const actions = renderTopActions();
   return `
     <header class="topbar">
-      <h1>${title}</h1>
+      <div class="topbar-title">
+        <button class="icon-btn sidebar-toggle" type="button" data-action="toggle-sidebar" title="${state.sidebarCollapsed ? "Mostrar painel lateral" : "Esconder painel lateral"}" aria-label="${state.sidebarCollapsed ? "Mostrar painel lateral" : "Esconder painel lateral"}">
+          ${icon(state.sidebarCollapsed ? "menu_open" : "menu")}
+        </button>
+        <h1>${title}</h1>
+      </div>
       <div>${actions}</div>
     </header>
     ${state.firebaseError ? `<div class="notice error-notice">${icon("error")} ${escapeHtml(state.firebaseError)}</div>` : ""}
@@ -1195,29 +1220,6 @@ function reportSales(bounds) {
   });
 }
 
-function paymentGroupKey(method) {
-  const normalized = normalizePaymentMethod(method);
-  if (normalized === "PIX") return "pix";
-  if (normalized === "CASH") return "cash";
-  if (normalized === "DEBIT_CARD" || normalized === "CREDIT_CARD" || normalized === "CREDIT_CREDIT") return "card";
-  return "other";
-}
-
-function reportPaymentSummary(sales) {
-  const summary = {
-    cash: { label: "Dinheiro", amount: 0, count: 0 },
-    card: { label: "Cartao", amount: 0, count: 0 },
-    pix: { label: "Pix", amount: 0, count: 0 },
-    other: { label: "Outros", amount: 0, count: 0 },
-  };
-  sales.forEach((item) => {
-    const key = paymentGroupKey(paymentMethodValue(item));
-    summary[key].amount += saleAmount(item);
-    summary[key].count += 1;
-  });
-  return summary;
-}
-
 function reportDetailedSaleItems(sales) {
   return sales.flatMap((record) => {
     const sale = saleData(record);
@@ -1292,52 +1294,75 @@ function reportPeriodLabel(bounds) {
   return startLabel === endLabel ? startLabel : `${startLabel} ate ${endLabel}`;
 }
 
-function reportPaymentCards(paymentSummary, total) {
-  return ["cash", "card", "pix", "other"].map((key) => {
-    const item = paymentSummary[key];
-    const share = total > 0 ? Math.round((item.amount / total) * 100) : 0;
-    return `
-      <article class="report-payment-card">
-        <div>
-          <span>${escapeHtml(item.label)}</span>
-          <strong>${money.format(item.amount)}</strong>
-        </div>
-        <small>${item.count} venda${item.count === 1 ? "" : "s"} - ${share}%</small>
-        <div class="report-payment-track"><span style="width: ${share}%"></span></div>
-      </article>
-    `;
-  }).join("");
+function reportPaymentTotals(sales) {
+  return sales.reduce((totals, record) => {
+    const amount = saleAmount(record);
+    const group = paymentMethodGroup(record);
+    totals.total += amount;
+    if (group === "PIX") totals.pix += amount;
+    else if (group === "CARD") totals.card += amount;
+    else if (group === "CASH") totals.cash += amount;
+    else totals.other += amount;
+    return totals;
+  }, { total: 0, pix: 0, card: 0, cash: 0, other: 0 });
+}
+
+function reportConsolidatedRows(sales, financialMovements, manualStockEntries) {
+  const saleRows = sales.map((record) => {
+    const items = saleItems(record);
+    const quantity = items.reduce((sum, item) => sum + (Number(item.quantity) || 0), 0);
+    return {
+      id: saleData(record).id ?? record.docId ?? "-",
+      timestamp: saleTimestamp(record),
+      type: paymentMethodGroupLabel(record),
+      description: saleProductNames(record),
+      detail: `Venda #${saleData(record).id ?? record.docId ?? "-"}`,
+      quantity: quantity ? formatDecimalInput(quantity) : "-",
+      amount: saleAmount(record),
+      amountClass: "plus",
+    };
+  });
+  const movementRows = financialMovements.map((item) => {
+    const isExit = item.kind === "exit";
+    return {
+      id: item.id,
+      timestamp: item.timestamp,
+      type: isExit ? "Saida" : "Entrada",
+      description: item.description,
+      detail: item.category || paymentMethodLabel(item.paymentMethod),
+      quantity: "-",
+      amount: (isExit ? -1 : 1) * item.amount,
+      amountClass: isExit ? "minus" : "plus",
+      isCancelled: item.isCancelled,
+    };
+  });
+  const stockRows = manualStockEntries.map((item) => ({
+    id: item.id,
+    timestamp: item.timestamp,
+    type: "Entrada estoque",
+    description: item.productName,
+    detail: item.reason,
+    quantity: `+${formatDecimalInput(item.quantity)} ${item.unit}`,
+    amount: null,
+    amountClass: "plus",
+  }));
+  return [...saleRows, ...movementRows, ...stockRows].sort((a, b) => a.timestamp - b.timestamp);
 }
 
 function renderReports() {
   const bounds = reportFilterBounds();
-  const reportTransactions = allTransactions().filter((item) => inBounds(item.timestamp, bounds));
   const sales = reportSales(bounds);
-  const sold = sales.reduce((sum, item) => sum + saleAmount(item), 0);
-  const exits = state.data.exits
-    .filter((item) => !item.isCancelled && inBounds(item.timestamp, bounds))
-    .reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
-  const entries = state.data.entries
-    .filter((item) => !item.isCancelled && inBounds(item.timestamp, bounds))
-    .reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
-  const result = sold + entries - exits;
-  const stockValue = state.data.products.reduce((sum, item) => sum + (Number(item.stockQuantity) || 0) * (Number(item.costPrice) || 0), 0);
+  const paymentTotals = reportPaymentTotals(sales);
+  const sold = paymentTotals.total;
   const currentYear = new Date().getFullYear();
   const months = monthNames();
-  const paymentSummary = reportPaymentSummary(sales);
-  const detailedItems = reportDetailedSaleItems(sales);
   const financialMovements = reportFinancialMovements(bounds);
   const manualStockEntries = reportManualStockEntries(bounds);
-  const detailedItemRows = renderGroupedTableRows(detailedItems, 6, renderDetailedSaleItemRow);
-  const reportTransactionRows = renderGroupedTableRows(reportTransactions, 6, renderReportTransactionRow);
-  const financialMovementRows = renderGroupedTableRows(financialMovements, 8, renderReportFinancialMovementRow);
-  const manualStockEntryRows = renderGroupedTableRows(manualStockEntries, 5, renderManualStockEntryRow);
-  const resultClass = result < 0 ? "negative" : "positive";
+  const consolidatedRows = reportConsolidatedRows(sales, financialMovements, manualStockEntries);
+  const consolidatedTableRows = renderGroupedTableRows(consolidatedRows, 6, renderConsolidatedReportRow);
+  const resultClass = "positive";
   const periodLabel = reportPeriodLabel(bounds);
   const saleCount = sales.length;
-  const itemCount = detailedItems.reduce((sum, item) => sum + (Number(item.quantity) || 0), 0);
-  const entryCount = financialMovements.filter((item) => item.kind === "entry" && !item.isCancelled).length;
-  const exitCount = financialMovements.filter((item) => item.kind === "exit" && !item.isCancelled).length;
   return `
     <section class="section">
       <article class="panel report-export">
@@ -1419,88 +1444,48 @@ function renderReports() {
       <section class="report-results">
         <article class="report-result-hero report-result-hero--${resultClass}">
           <div>
-            <span>Resultado do periodo</span>
-            <strong>${money.format(result)}</strong>
+            <span>Somatorio de vendas</span>
+            <strong>${money.format(sold)}</strong>
             <small>${escapeHtml(periodLabel)}</small>
           </div>
-          <div class="report-result-icon">${icon(result < 0 ? "trending_down" : "trending_up")}</div>
+          <div class="report-result-icon">${icon("point_of_sale")}</div>
         </article>
         <div class="report-kpi-grid">
           <article class="report-kpi report-kpi--sales">
-            <span>Vendas</span>
+            <span>Total geral</span>
             <strong>${money.format(sold)}</strong>
             <small>${saleCount} venda${saleCount === 1 ? "" : "s"}</small>
           </article>
           <article class="report-kpi report-kpi--entries">
-            <span>Entradas avulsas</span>
-            <strong>${money.format(entries)}</strong>
-            <small>${entryCount} registro${entryCount === 1 ? "" : "s"}</small>
+            <span>Pix</span>
+            <strong>${money.format(paymentTotals.pix)}</strong>
+            <small>Somatorio em Pix</small>
           </article>
           <article class="report-kpi report-kpi--exits">
-            <span>Saidas</span>
-            <strong>${money.format(exits)}</strong>
-            <small>${exitCount} registro${exitCount === 1 ? "" : "s"}</small>
+            <span>Cartao</span>
+            <strong>${money.format(paymentTotals.card)}</strong>
+            <small>Debito e credito</small>
           </article>
           <article class="report-kpi report-kpi--stock">
-            <span>Custo em estoque</span>
-            <strong>${money.format(stockValue)}</strong>
-            <small>${formatDecimalInput(itemCount)} item${itemCount === 1 ? "" : "s"} vendido${itemCount === 1 ? "" : "s"}</small>
+            <span>Dinheiro</span>
+            <strong>${money.format(paymentTotals.cash)}</strong>
+            <small>Somatorio em dinheiro</small>
           </article>
         </div>
       </section>
-      <section class="report-payment-panel">
+      <div class="panel table-wrap report-table">
         <div class="report-section-heading">
           <div>
-            <h2>Formas de Pagamento</h2>
-            <p class="muted">Distribuicao das vendas no periodo selecionado.</p>
+            <h2>Relatorio Consolidado</h2>
+            <p class="muted">Todas as vendas aparecem na mesma tabela com Pix, Cartao ou Dinheiro na coluna de tipo.</p>
           </div>
           <strong>${money.format(sold)}</strong>
         </div>
-        <div class="report-payment-grid">${reportPaymentCards(paymentSummary, sold)}</div>
-      </section>
-      <div class="panel table-wrap report-table">
-        <div class="report-section-heading">
-          <div>
-            <h2>Itens Vendidos</h2>
-            <p class="muted">${formatDecimalInput(itemCount)} item${itemCount === 1 ? "" : "s"} vendido${itemCount === 1 ? "" : "s"} no periodo.</p>
-          </div>
+        <div class="report-table-scroll">
+          <table><thead><tr><th>Data/Hora</th><th>Tipo de venda</th><th>Descricao</th><th>Detalhe/Categoria</th><th>Quantidade</th><th>Valor</th></tr></thead><tbody>
+            ${consolidatedTableRows || `<tr><td colspan="6">Sem dados neste periodo.</td></tr>`}
+          </tbody></table>
         </div>
-        <table><thead><tr><th>Venda</th><th>Data/Hora</th><th>Quant.</th><th>Produto</th><th>Pagamento</th><th>Valor</th></tr></thead><tbody>
-          ${detailedItemRows || `<tr><td colspan="6">Sem itens vendidos neste periodo.</td></tr>`}
-        </tbody></table>
-      </div>
-      <div class="panel table-wrap report-table">
-        <div class="report-section-heading">
-          <div>
-            <h2>Movimentacoes do Periodo</h2>
-            <p class="muted">Vendas, entradas e saidas reunidas em ordem de data.</p>
-          </div>
-        </div>
-        <table><thead><tr><th>Data/Hora</th><th>Tipo</th><th>Descricao</th><th>Categoria/Pagamento</th><th>Caixa</th><th>Valor</th></tr></thead><tbody>
-          ${reportTransactionRows || `<tr><td colspan="6">Sem dados.</td></tr>`}
-        </tbody></table>
-      </div>
-      <div class="panel table-wrap report-table">
-        <div class="report-section-heading">
-          <div>
-            <h2>Entradas e Saidas Financeiras</h2>
-            <p class="muted">Movimentos avulsos que afetam o resultado do caixa.</p>
-          </div>
-        </div>
-        <table><thead><tr><th>ID</th><th>Data/Hora</th><th>Tipo</th><th>Descricao</th><th>Categoria</th><th>Pagamento</th><th>Caixa</th><th>Valor</th></tr></thead><tbody>
-          ${financialMovementRows || `<tr><td colspan="8">Sem entradas ou saidas neste periodo.</td></tr>`}
-        </tbody></table>
-      </div>
-      <div class="panel table-wrap report-table">
-        <div class="report-section-heading">
-          <div>
-            <h2>Entradas Manuais de Estoque</h2>
-            <p class="muted">Reposicoes de estoque exibidas separadamente do caixa.</p>
-          </div>
-        </div>
-        <table><thead><tr><th>ID</th><th>Data/Hora</th><th>Produto</th><th>Quantidade</th><th>Motivo</th></tr></thead><tbody>
-          ${manualStockEntryRows || `<tr><td colspan="5">Sem entradas manuais de estoque neste periodo.</td></tr>`}
-        </tbody></table>
       </div>
     </section>
   `;
@@ -1514,50 +1499,16 @@ function renderGroupedTableRows(items, colspan, renderRow) {
   return renderGroupedByDate(items, renderRow, (label) => renderTableDateDivider(label, colspan));
 }
 
-function renderDetailedSaleItemRow(item) {
+function renderConsolidatedReportRow(item) {
+  const amount = item.amount == null ? "-" : money.format(item.amount);
   return `
     <tr>
-      <td>#${escapeHtml(item.saleId)}</td>
       <td>${item.timestamp ? dateTime.format(new Date(item.timestamp)) : "-"}</td>
-      <td>${formatDecimalInput(item.quantity)}</td>
-      <td>${escapeHtml(item.productName)}</td>
-      <td>${escapeHtml(paymentMethodLabel(item.paymentMethod))}</td>
-      <td>${money.format(item.subtotal)}</td>
-    </tr>
-  `;
-}
-
-function renderReportTransactionRow(item) {
-  const sign = item.kind === "exit" ? -1 : 1;
-  const amountClass = item.kind === "exit" ? "minus" : "plus";
-  return `<tr><td>${item.timestamp ? dateTime.format(new Date(item.timestamp)) : "-"}</td><td>${escapeHtml(transactionKindLabel(item.kind))}</td><td>${escapeHtml(item.title)}</td><td>${escapeHtml(item.subtitle || "-")}</td><td>${item.id ? `#${escapeHtml(item.id)}` : "-"}</td><td><strong class="amount ${amountClass}">${money.format(sign * item.amount)}</strong></td></tr>`;
-}
-
-function renderReportFinancialMovementRow(item) {
-  const amountClass = item.kind === "exit" ? "minus" : "plus";
-  const sign = item.kind === "exit" ? -1 : 1;
-  return `
-    <tr>
-      <td>#${escapeHtml(item.id)}</td>
-      <td>${item.timestamp ? dateTime.format(new Date(item.timestamp)) : "-"}</td>
-      <td><span class="badge ${item.kind === "exit" ? "bad" : "good"}">${escapeHtml(transactionKindLabel(item.kind))}</span></td>
-      <td>${escapeHtml(item.description)}</td>
-      <td>${escapeHtml(item.category || "-")}</td>
-      <td>${escapeHtml(paymentMethodLabel(item.paymentMethod))}</td>
-      <td>${item.cashRegisterId ? `#${escapeHtml(item.cashRegisterId)}` : "-"}</td>
-      <td><strong class="amount ${amountClass}">${money.format(sign * item.amount)}</strong>${item.isCancelled ? ` <span class="badge bad">CANCELADA</span>` : ""}</td>
-    </tr>
-  `;
-}
-
-function renderManualStockEntryRow(item) {
-  return `
-    <tr>
-      <td>#${escapeHtml(item.id)}</td>
-      <td>${item.timestamp ? dateTime.format(new Date(item.timestamp)) : "-"}</td>
-      <td>${escapeHtml(item.productName)}</td>
-      <td><strong class="amount plus">+${formatDecimalInput(item.quantity)} ${escapeHtml(item.unit)}</strong></td>
-      <td>${escapeHtml(item.reason)}</td>
+      <td><span class="badge ${item.amountClass === "minus" ? "bad" : "good"}">${escapeHtml(item.type)}</span></td>
+      <td>${escapeHtml(item.description)}${item.isCancelled ? ` <span class="badge bad">CANCELADA</span>` : ""}</td>
+      <td>${escapeHtml(item.detail || "-")}</td>
+      <td>${escapeHtml(item.quantity || "-")}</td>
+      <td><strong class="amount ${item.amountClass}">${escapeHtml(amount)}</strong></td>
     </tr>
   `;
 }
@@ -1798,6 +1749,10 @@ const actions = {
   "entry-new": () => openMovementModal("entry"),
   "exit-new": () => openMovementModal("exit"),
   "cart-clear": () => clearCart(),
+  "toggle-sidebar": () => {
+    state.sidebarCollapsed = !state.sidebarCollapsed;
+    renderApp();
+  },
   "theme-toggle": () => toggleTheme(),
   "refresh-data": () => renderApp(),
   "export-inventory": () => exportInventoryCsv(),
@@ -2117,6 +2072,7 @@ function exportSalesReport(period) {
     return;
   }
   const report = getReportPeriod(period);
+  const bounds = [report.startTime, report.endTime];
   const sales = state.data.sales
     .filter((item) => {
       const timestamp = saleTimestamp(item);
@@ -2124,17 +2080,11 @@ function exportSalesReport(period) {
     })
     .sort((a, b) => saleTimestamp(a) - saleTimestamp(b));
 
-  const rows = sales.map((item) => ({
-    id: `#${saleData(item).id ?? item.docId ?? "-"}`,
-    date: saleTimestamp(item) ? dateTime.format(new Date(saleTimestamp(item))) : "-",
-    products: saleProductNames(item),
-    payment: paymentMethodLabel(item),
-    amount: money.format(saleAmount(item)),
-  }));
-  const totalAmount = sales.reduce((sum, item) => sum + saleAmount(item), 0);
-  const financialMovements = reportFinancialMovements([report.startTime, report.endTime]);
-  const manualStockEntries = reportManualStockEntries([report.startTime, report.endTime]);
-  const pdf = createSalesReportPdf(report.title, `Data: ${dateTime.format(new Date())}`, rows, money.format(totalAmount), reportPaymentSummary(sales), financialMovements, manualStockEntries);
+  const financialMovements = reportFinancialMovements(bounds);
+  const manualStockEntries = reportManualStockEntries(bounds);
+  const rows = reportConsolidatedRows(sales, financialMovements, manualStockEntries);
+  const paymentTotals = reportPaymentTotals(sales);
+  const pdf = createSalesReportPdf(report.title, `Data: ${dateTime.format(new Date())}`, rows, paymentTotals);
   downloadBlob(pdf, report.filename, "application/pdf");
   toast("Relatorio exportado.");
 }
@@ -2232,19 +2182,30 @@ function pdfTextLine(x, y, size, text, bold = false) {
   return `BT /${bold ? "F2" : "F1"} ${size} Tf ${x} ${y} Td (${normalizePdfText(text)}) Tj ET`;
 }
 
-function createSalesReportPdf(title, generatedAt, rows, totalText, paymentSummary = null, financialMovements = [], manualStockEntries = []) {
+function createSalesReportPdf(title, generatedAt, rows, paymentTotals) {
   const width = 595;
   const height = 842;
   const pages = [];
-  let lines = [pdfTextLine(40, 802, 18, title, true), pdfTextLine(40, 770, 10, generatedAt)];
-  let y = 730;
+  const totalText = money.format(paymentTotals.total);
+  let lines = [
+    pdfTextLine(40, 802, 18, title, true),
+    pdfTextLine(40, 775, 11, "Relatorio consolidado de vendas"),
+    pdfTextLine(40, 758, 9, "Uma unica tabela com a forma de pagamento na coluna Tipo de venda."),
+    pdfTextLine(40, 742, 9, generatedAt),
+    pdfTextLine(40, 720, 10, `Total geral: ${totalText}`, true),
+    pdfTextLine(205, 720, 10, `Pix: ${money.format(paymentTotals.pix)}`, true),
+    pdfTextLine(330, 720, 10, `Cartao: ${money.format(paymentTotals.card)}`, true),
+    pdfTextLine(455, 720, 10, `Dinheiro: ${money.format(paymentTotals.cash)}`, true),
+  ];
+  let y = 680;
 
   const addHeader = () => {
-    lines.push(pdfTextLine(40, y, 12, "ID", true));
-    lines.push(pdfTextLine(80, y, 12, "Data/Hora", true));
-    lines.push(pdfTextLine(170, y, 12, "Produtos", true));
-    lines.push(pdfTextLine(390, y, 12, "Pagamento", true));
-    lines.push(pdfTextLine(480, y, 12, "Valor", true));
+    lines.push(pdfTextLine(40, y, 9, "Data/Hora", true));
+    lines.push(pdfTextLine(116, y, 9, "Tipo de venda", true));
+    lines.push(pdfTextLine(205, y, 9, "Descricao", true));
+    lines.push(pdfTextLine(355, y, 9, "Pag/Cat", true));
+    lines.push(pdfTextLine(435, y, 9, "Qtde", true));
+    lines.push(pdfTextLine(500, y, 9, "Valor", true));
     lines.push(`40 ${y - 8} m 555 ${y - 8} l S`);
     y -= 25;
   };
@@ -2256,104 +2217,37 @@ function createSalesReportPdf(title, generatedAt, rows, totalText, paymentSummar
   };
   const newPlainPage = () => {
     pages.push(lines.join("\n"));
-    lines = [pdfTextLine(40, 802, 18, title, true), pdfTextLine(40, 770, 10, generatedAt)];
-    y = 730;
+    lines = [
+      pdfTextLine(40, 802, 18, title, true),
+      pdfTextLine(40, 775, 11, "Relatorio consolidado de vendas"),
+      pdfTextLine(40, 758, 9, generatedAt),
+    ];
+    y = 725;
   };
 
   addHeader();
   if (!rows.length) {
-    lines.push(pdfTextLine(40, y, 10, "Nenhuma venda encontrada neste periodo."));
+    lines.push(pdfTextLine(40, y, 10, "Nenhum movimento encontrado neste periodo."));
     y -= 22;
   }
   rows.forEach((row) => {
-    const productLines = wrapPdfText(row.products, 34);
-    const rowHeight = Math.max(22, productLines.length * 14 + 8);
+    const descriptionLines = wrapPdfText(row.description, 22);
+    const detailLines = wrapPdfText(row.detail, 13);
+    const rowHeight = Math.max(22, Math.max(descriptionLines.length, detailLines.length) * 13 + 8);
     if (y - rowHeight < 55) newPage();
-    lines.push(pdfTextLine(40, y, 10, row.id));
-    lines.push(pdfTextLine(80, y, 10, row.date));
-    productLines.forEach((line, index) => {
-      lines.push(pdfTextLine(170, y - index * 14, 10, line));
-    });
-    lines.push(pdfTextLine(390, y, 10, row.payment || "-"));
-    lines.push(pdfTextLine(480, y, 10, row.amount));
+    lines.push(pdfTextLine(40, y, 8, row.timestamp ? dateTime.format(new Date(row.timestamp)) : "-"));
+    lines.push(pdfTextLine(116, y, 8, row.type));
+    descriptionLines.forEach((line, index) => lines.push(pdfTextLine(205, y - index * 13, 9, line)));
+    detailLines.forEach((line, index) => lines.push(pdfTextLine(355, y - index * 13, 9, line)));
+    lines.push(pdfTextLine(435, y, 9, row.quantity || "-"));
+    lines.push(pdfTextLine(500, y, 9, row.amount == null ? "-" : money.format(row.amount)));
     y -= rowHeight;
   });
-  if (y < 120) newPage();
+  if (y < 90) newPage();
   lines.push(`40 ${y} m 555 ${y} l S`);
   y -= 22;
-  if (paymentSummary) {
-    lines.push(pdfTextLine(350, y, 11, "RESUMO FINANCEIRO", true));
-    y -= 18;
-    ["cash", "card", "pix"].forEach((key) => {
-      lines.push(pdfTextLine(350, y, 10, `${paymentSummary[key].label}:`));
-      lines.push(pdfTextLine(480, y, 10, money.format(paymentSummary[key].amount)));
-      y -= 14;
-    });
-    if (paymentSummary.other.amount > 0) {
-      lines.push(pdfTextLine(350, y, 10, "Outros:"));
-      lines.push(pdfTextLine(480, y, 10, money.format(paymentSummary.other.amount)));
-      y -= 14;
-    }
-    lines.push(`350 ${y + 5} m 555 ${y + 5} l S`);
-    y -= 14;
-  }
   lines.push(pdfTextLine(350, y, 12, "TOTAL GERAL:", true));
   lines.push(pdfTextLine(480, y, 12, totalText, true));
-  if (financialMovements.length) {
-    newPlainPage();
-    lines.push(pdfTextLine(40, y, 13, "ENTRADAS E SAIDAS DO PERIODO", true));
-    y -= 24;
-    lines.push(pdfTextLine(40, y, 10, "Data/Hora", true));
-    lines.push(pdfTextLine(122, y, 10, "Tipo", true));
-    lines.push(pdfTextLine(175, y, 10, "Descricao", true));
-    lines.push(pdfTextLine(340, y, 10, "Categoria", true));
-    lines.push(pdfTextLine(430, y, 10, "Pagamento", true));
-    lines.push(pdfTextLine(510, y, 10, "Valor", true));
-    lines.push(`40 ${y - 8} m 555 ${y - 8} l S`);
-    y -= 24;
-    financialMovements.forEach((item) => {
-      const descLines = wrapPdfText(item.description, 25);
-      const rowHeight = Math.max(22, descLines.length * 13 + 8);
-      if (y - rowHeight < 55) {
-        newPlainPage();
-        lines.push(pdfTextLine(40, y, 13, "ENTRADAS E SAIDAS DO PERIODO", true));
-        y -= 24;
-      }
-      lines.push(pdfTextLine(40, y, 9, item.timestamp ? dateTime.format(new Date(item.timestamp)) : "-"));
-      lines.push(pdfTextLine(122, y, 9, transactionKindLabel(item.kind)));
-      descLines.forEach((line, index) => lines.push(pdfTextLine(175, y - index * 13, 9, line)));
-      lines.push(pdfTextLine(340, y, 9, item.category || "-"));
-      lines.push(pdfTextLine(430, y, 9, paymentMethodLabel(item.paymentMethod)));
-      lines.push(pdfTextLine(510, y, 9, money.format((item.kind === "exit" ? -1 : 1) * item.amount)));
-      y -= rowHeight;
-    });
-  }
-  if (manualStockEntries.length) {
-    newPlainPage();
-    lines.push(pdfTextLine(40, y, 13, "ENTRADAS MANUAIS DE ESTOQUE", true));
-    y -= 24;
-    lines.push(pdfTextLine(40, y, 10, "Data/Hora", true));
-    lines.push(pdfTextLine(130, y, 10, "Produto", true));
-    lines.push(pdfTextLine(300, y, 10, "Quantidade", true));
-    lines.push(pdfTextLine(390, y, 10, "Motivo", true));
-    lines.push(`40 ${y - 8} m 555 ${y - 8} l S`);
-    y -= 24;
-    manualStockEntries.forEach((item) => {
-      const productLines = wrapPdfText(item.productName, 24);
-      const reasonLines = wrapPdfText(item.reason, 24);
-      const rowHeight = Math.max(22, Math.max(productLines.length, reasonLines.length) * 13 + 8);
-      if (y - rowHeight < 55) {
-        newPlainPage();
-        lines.push(pdfTextLine(40, y, 13, "ENTRADAS MANUAIS DE ESTOQUE", true));
-        y -= 24;
-      }
-      lines.push(pdfTextLine(40, y, 9, item.timestamp ? dateTime.format(new Date(item.timestamp)) : "-"));
-      productLines.forEach((line, index) => lines.push(pdfTextLine(130, y - index * 13, 9, line)));
-      lines.push(pdfTextLine(300, y, 9, `+${formatDecimalInput(item.quantity)} ${item.unit}`));
-      reasonLines.forEach((line, index) => lines.push(pdfTextLine(390, y - index * 13, 9, line)));
-      y -= rowHeight;
-    });
-  }
   pages.push(lines.join("\n"));
 
   return buildPdf(pages, width, height);

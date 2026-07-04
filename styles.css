@@ -282,6 +282,16 @@ button {
   color: var(--primary);
 }
 
+body.dark .btn.secondary {
+  border: 1px solid var(--line);
+  background: var(--accent-soft);
+  color: var(--text);
+}
+
+body.dark .btn.secondary .material-symbols-rounded {
+  color: var(--accent);
+}
+
 .btn.ghost {
   background: transparent;
   color: var(--accent);
@@ -313,6 +323,15 @@ button {
   color: var(--primary);
 }
 
+body.dark .icon-btn {
+  color: var(--text);
+}
+
+body.dark .icon-btn:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
 .error {
   width: 100%;
   min-height: 22px;
@@ -324,16 +343,28 @@ button {
 .app-shell {
   min-height: 100vh;
   display: grid;
-  grid-template-columns: 248px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   width: 100%;
   max-width: 100%;
+  padding-left: 248px;
   overflow-x: hidden;
+}
+
+.app-shell.sidebar-collapsed {
+  padding-left: 0;
+}
+
+.app-shell.sidebar-collapsed .sidebar {
+  display: none;
 }
 
 .sidebar {
   min-width: 0;
-  position: sticky;
+  position: fixed;
   top: 0;
+  left: 0;
+  z-index: 20;
+  width: 248px;
   height: 100vh;
   display: flex;
   flex-direction: column;
@@ -458,9 +489,24 @@ button {
   margin-bottom: 18px;
 }
 
+.topbar-title {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sidebar-toggle {
+  flex: 0 0 auto;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
+}
+
 .topbar h1 {
   margin: 0;
   font-size: 26px;
+  overflow-wrap: anywhere;
 }
 
 .section {
@@ -570,6 +616,20 @@ button {
   font-size: 30px;
 }
 
+body.dark .report-icon,
+body.dark .report-icon--sheet,
+body.dark .report-icon--backup,
+body.dark .report-result-icon {
+  border: 1px solid var(--line);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+body.dark .report-icon .material-symbols-rounded,
+body.dark .report-result-icon .material-symbols-rounded {
+  color: currentColor;
+}
+
 .report-options {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(320px, 0.72fr);
@@ -653,8 +713,7 @@ button {
 }
 
 .report-result-hero span,
-.report-kpi span,
-.report-payment-card span {
+.report-kpi span {
   color: var(--muted);
   font-weight: 800;
 }
@@ -668,8 +727,7 @@ button {
 }
 
 .report-result-hero small,
-.report-kpi small,
-.report-payment-card small {
+.report-kpi small {
   color: var(--muted);
   font-weight: 700;
 }
@@ -723,11 +781,6 @@ button {
   border-top: 4px solid var(--primary);
 }
 
-.report-payment-panel {
-  display: grid;
-  gap: 14px;
-}
-
 .report-section-heading {
   display: flex;
   align-items: flex-start;
@@ -749,45 +802,24 @@ button {
   white-space: nowrap;
 }
 
-.report-payment-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.report-payment-card {
-  display: grid;
-  gap: 10px;
-  min-width: 0;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 12px;
-  background: #f9fbfd;
-}
-
-.report-payment-card strong {
-  display: block;
-  margin-top: 4px;
-  font-size: 22px;
-  overflow-wrap: anywhere;
-}
-
-.report-payment-track {
-  height: 8px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: #e8eef6;
-}
-
-.report-payment-track span {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: var(--accent);
-}
-
 .report-table {
   padding-top: 14px;
+  overflow: visible;
+}
+
+.report-table-scroll {
+  max-height: min(56vh, 520px);
+  overflow: auto;
+  border-radius: 8px;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-gutter: stable;
+}
+
+.report-table-scroll thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface);
 }
 
 .filters-toolbar {
@@ -804,13 +836,8 @@ body.dark .cart-total,
 body.dark .notice,
 body.dark .settings-row,
 body.dark .report-result-hero,
-body.dark .report-kpi,
-body.dark .report-payment-card {
+body.dark .report-kpi {
   background: var(--surface);
-}
-
-body.dark .report-payment-track {
-  background: #263244;
 }
 
 .search {
@@ -1295,12 +1322,15 @@ body.dark .transaction-row .amount.minus {
 @media (max-width: 980px) {
   .app-shell {
     grid-template-columns: 1fr;
+    padding-left: 0;
   }
 
   .sidebar {
     position: sticky;
     top: 0;
+    left: auto;
     z-index: 10;
+    width: auto;
     height: auto;
     gap: 10px;
     max-width: 100vw;
@@ -1369,8 +1399,7 @@ body.dark .transaction-row .amount.minus {
   }
 
   .report-filter-grid,
-  .report-export-actions,
-  .report-payment-grid {
+  .report-export-actions {
     grid-template-columns: 1fr;
   }
 
@@ -1663,8 +1692,7 @@ body.dark .transaction-row .amount.minus {
   }
 
   .report-results,
-  .report-kpi-grid,
-  .report-payment-grid {
+  .report-kpi-grid {
     grid-template-columns: 1fr;
   }
 

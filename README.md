@@ -1,55 +1,36 @@
-# GO REGISTER Site
+# GO REGISTER Web
 
-Versao web do GO REGISTER, conectada ao mesmo projeto Firebase usado no aplicativo Android.
+GO REGISTER Web e um sistema de ponto de venda e gestao comercial criado para pequenos negocios que precisam controlar vendas, caixa, estoque, usuarios e relatorios em uma interface simples e responsiva.
 
-Apesar de nao exigir build, a aplicacao e dinamica: as telas leem e gravam no Firestore, escutam mudancas em tempo real e usam rotas internas por hash.
+O projeto funciona direto no navegador e usa Firebase/Firestore para sincronizar os dados em tempo real.
 
-## Como rodar
+## Destaques
 
-Na pasta do repositorio:
+- PDV com carrinho, desconto e finalizacao por dinheiro, Pix, cartao de debito ou cartao de credito.
+- Controle automatico de estoque a cada venda.
+- Abertura e fechamento de caixa com saldo esperado, saldo informado e diferenca.
+- Entradas e saidas financeiras manuais.
+- Cadastro de produtos, categorias e fornecedores.
+- Historico de vendas, caixa e movimentacoes de estoque.
+- Relatorios com filtros por periodo, dia especifico e mes.
+- Exportacao de relatorios em PDF, inventario em CSV e backup em JSON.
+- Gerenciamento de usuarios com perfis de operador, administrador e administrador mestre.
+- Tema claro, escuro e variacoes visuais configuraveis.
 
-```powershell
-cd site
-python -m http.server 5173
-```
+## Tecnologias
 
-Depois acesse:
+- HTML5
+- CSS3
+- JavaScript moderno
+- Firebase Firestore
+- Material Symbols
 
-```text
-http://localhost:5173
-```
+## Primeiros Passos
 
-## Primeiro acesso
+No primeiro acesso, se ainda nao houver usuarios cadastrados, o sistema permite criar o primeiro usuario como administrador mestre pela tela de login.
 
-No primeiro acesso, quando a colecao `users` ainda estiver vazia, informe o usuario e a senha desejados na tela de login.
-O site cria esse primeiro usuario como `Administrador Mestre`.
+Depois disso, novos usuarios devem ser criados dentro do proprio painel, na area de ajustes e gerenciamento de usuarios.
 
-Depois disso, novos usuarios devem ser criados em **Ajustes > Gerenciar Usuarios** por um administrador.
+## Status
 
-## Colecoes Firestore usadas
-
-- `products`
-- `sales`
-- `categories`
-- `suppliers`
-- `cash_registers`
-- `financial_entries`
-- `financial_exits`
-- `users`
-- `stock_movements`
-
-## Funcionalidades no site
-
-- Operador: painel, vendas/PDV, abrir e fechar caixa, entradas e saidas manuais, ajustes basicos e logout
-- Administrador: tudo do operador mais estoque, categorias, fornecedores, usuarios, relatorios e historicos
-- Realizar vendas no PDV
-- Aplicar desconto na venda
-- Controlar quantidade no carrinho
-- Baixar estoque automaticamente ao vender
-- Cancelar venda, entrada ou saida com credenciais de um administrador ativo
-- Devolver estoque automaticamente ao cancelar venda
-- Cadastrar, editar e excluir produtos, categorias e fornecedores
-- Gerenciar usuarios
-- Ajustar estoque manualmente
-- Ver historico de estoque
-- Ver historico de caixa com saldo esperado, informado e diferenca
+Projeto em desenvolvimento ativo, com foco em paridade entre a experiencia web e o aplicativo GO REGISTER.
