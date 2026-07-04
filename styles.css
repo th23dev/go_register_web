@@ -186,7 +186,7 @@ button {
   min-height: 100vh;
   display: grid;
   place-items: center;
-  background: #fff;
+  background: var(--background);
   padding: 28px;
 }
 
@@ -195,12 +195,20 @@ button {
   display: grid;
   justify-items: center;
   gap: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  padding: 30px;
 }
 
 .login-logo {
   width: 160px;
   height: 160px;
   object-fit: contain;
+  border-radius: 8px;
+  background: #fff;
+  padding: 10px;
 }
 
 .login-title {
@@ -229,17 +237,17 @@ button {
   gap: 10px;
   border: 1px solid var(--line);
   border-radius: 12px;
-  background: #fff;
+  background: var(--surface);
   padding: 0 14px;
 }
 
 .input-wrap:focus-within {
-  border-color: #5d9cec;
-  box-shadow: 0 0 0 3px rgba(93, 156, 236, 0.14);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 .input-wrap .material-symbols-rounded {
-  color: #5d9cec;
+  color: var(--accent);
 }
 
 .input-wrap input,
