@@ -37,11 +37,32 @@ const collections = {
   settings: "settings",
 };
 
+const themeOptions = [
+  ["classic", "Classico"],
+  ["emerald", "Esmeralda"],
+  ["sunrise", "Amanhecer"],
+  ["midnight", "Noturno"],
+  ["graphite", "Grafite"],
+  ["ocean", "Oceano Escuro"],
+  ["forest", "Floresta Escura"],
+  ["wine", "Vinho Escuro"],
+  ["contrast", "Alto Contraste"],
+];
+
+const darkThemes = new Set(["midnight", "graphite", "ocean", "forest", "wine", "contrast"]);
+
+function initialTheme() {
+  const savedTheme = localStorage.getItem("goRegisterTheme");
+  if (themeOptions.some(([id]) => id === savedTheme)) return savedTheme;
+  return localStorage.getItem("goRegisterDarkTheme") === "true" ? "midnight" : "classic";
+}
+
 const state = {
   user: null,
   session: JSON.parse(localStorage.getItem("goRegisterSession") || "null"),
   view: "dashboard",
-  darkTheme: localStorage.getItem("goRegisterDarkTheme") === "true",
+  theme: initialTheme(),
+  darkTheme: false,
   data: {
     products: [],
     sales: [],
@@ -414,13 +435,23 @@ function toast(message) {
 }
 
 function applyTheme() {
+  state.darkTheme = darkThemes.has(state.theme);
+  document.body.dataset.theme = state.theme;
   document.body.classList.toggle("dark", state.darkTheme);
 }
 
 function toggleTheme() {
-  state.darkTheme = !state.darkTheme;
-  localStorage.setItem("goRegisterDarkTheme", String(state.darkTheme));
+  const currentIndex = Math.max(0, themeOptions.findIndex(([id]) => id === state.theme));
+  setTheme(themeOptions[(currentIndex + 1) % themeOptions.length][0]);
+}
+
+function setTheme(theme) {
+  if (!themeOptions.some(([id]) => id === theme)) return;
+  state.theme = theme;
+  localStorage.setItem("goRegisterTheme", theme);
+  localStorage.setItem("goRegisterDarkTheme", String(darkThemes.has(theme)));
   applyTheme();
+  renderApp();
 }
 
 function isReady() {
@@ -1343,19 +1374,19 @@ function renderReports() {
       <div class="panel metric"><span>Valor de Custo em Estoque</span><strong>${money.format(stockValue)}</strong></div>
       <div class="panel table-wrap">
         <h2>Itens Vendidos por Forma de Pagamento</h2>
-        <table><thead><tr><th>Venda</th><th>Data</th><th>Quant.</th><th>Produto</th><th>Pagamento</th><th>Valor</th></tr></thead><tbody>
+        <table><thead><tr><th>Venda</th><th>Data/Hora</th><th>Quant.</th><th>Produto</th><th>Pagamento</th><th>Valor</th></tr></thead><tbody>
           ${detailedItemRows || `<tr><td colspan="6">Sem itens vendidos neste periodo.</td></tr>`}
         </tbody></table>
       </div>
       <div class="panel table-wrap">
         <h2>Movimentacoes do Periodo</h2>
-        <table><thead><tr><th>Data</th><th>Tipo</th><th>Descricao</th><th>Categoria/Pagamento</th><th>Caixa</th><th>Valor</th></tr></thead><tbody>
+        <table><thead><tr><th>Data/Hora</th><th>Tipo</th><th>Descricao</th><th>Categoria/Pagamento</th><th>Caixa</th><th>Valor</th></tr></thead><tbody>
           ${reportTransactionRows || `<tr><td colspan="6">Sem dados.</td></tr>`}
         </tbody></table>
       </div>
       <div class="panel table-wrap">
         <h2>Detalhes de Entradas e Saidas</h2>
-        <table><thead><tr><th>ID</th><th>Data</th><th>Tipo</th><th>Descricao</th><th>Categoria</th><th>Pagamento</th><th>Caixa</th><th>Valor</th></tr></thead><tbody>
+        <table><thead><tr><th>ID</th><th>Data/Hora</th><th>Tipo</th><th>Descricao</th><th>Categoria</th><th>Pagamento</th><th>Caixa</th><th>Valor</th></tr></thead><tbody>
           ${financialMovementRows || `<tr><td colspan="8">Sem entradas ou saidas neste periodo.</td></tr>`}
         </tbody></table>
       </div>
@@ -1375,7 +1406,7 @@ function renderDetailedSaleItemRow(item) {
   return `
     <tr>
       <td>#${escapeHtml(item.saleId)}</td>
-      <td>${item.timestamp ? dateOnly.format(new Date(item.timestamp)) : "-"}</td>
+      <td>${item.timestamp ? dateTime.format(new Date(item.timestamp)) : "-"}</td>
       <td>${formatDecimalInput(item.quantity)}</td>
       <td>${escapeHtml(item.productName)}</td>
       <td>${escapeHtml(paymentMethodLabel(item.paymentMethod))}</td>
@@ -1387,7 +1418,7 @@ function renderDetailedSaleItemRow(item) {
 function renderReportTransactionRow(item) {
   const sign = item.kind === "exit" ? -1 : 1;
   const amountClass = item.kind === "exit" ? "minus" : "plus";
-  return `<tr><td>${item.timestamp ? dateOnly.format(new Date(item.timestamp)) : "-"}</td><td>${escapeHtml(transactionKindLabel(item.kind))}</td><td>${escapeHtml(item.title)}</td><td>${escapeHtml(item.subtitle || "-")}</td><td>${item.id ? `#${escapeHtml(item.id)}` : "-"}</td><td><strong class="amount ${amountClass}">${money.format(sign * item.amount)}</strong></td></tr>`;
+  return `<tr><td>${item.timestamp ? dateTime.format(new Date(item.timestamp)) : "-"}</td><td>${escapeHtml(transactionKindLabel(item.kind))}</td><td>${escapeHtml(item.title)}</td><td>${escapeHtml(item.subtitle || "-")}</td><td>${item.id ? `#${escapeHtml(item.id)}` : "-"}</td><td><strong class="amount ${amountClass}">${money.format(sign * item.amount)}</strong></td></tr>`;
 }
 
 function renderReportFinancialMovementRow(item) {
@@ -1414,7 +1445,7 @@ function renderSettings() {
         <article class="panel">
           <h2>Personalizacao</h2>
           <p class="muted">Tema visual do site.</p>
-          <button class="btn secondary" data-action="theme-toggle">${icon("dark_mode")} Alternar tema</button>
+          ${select("themeSelect", "Tema", themeOptions, state.theme)}
         </article>
         <article class="panel">
           <h2>Nuvem e Backup</h2>
@@ -1443,6 +1474,7 @@ function renderSettings() {
 
 function bindViewEvents() {
   document.querySelectorAll("[data-action]").forEach((button) => button.addEventListener("click", () => runNamedAction(button.dataset.action)));
+  document.querySelector("[name='themeSelect']")?.addEventListener("change", (event) => setTheme(event.target.value));
   document.querySelectorAll("[data-report-period]").forEach((button) => button.addEventListener("click", () => exportSalesReport(button.dataset.reportPeriod)));
   document.querySelector("#reportsPeriod")?.addEventListener("change", (event) => {
     state.filters.reportsPeriod = event.target.value;
@@ -1609,12 +1641,13 @@ function productNameExists(name) {
   return state.data.products.some((item) => String(item.name || "").trim().toLowerCase() === normalized);
 }
 
-async function promptCreateProductFromManualSale(name) {
+async function promptCreateProductFromManualMovement(name, kind = "entry") {
   const productName = String(name || "").trim();
   if (!productName || productNameExists(productName)) return;
+  const context = kind === "exit" ? "saidas futuras" : "vendas futuras";
   const confirmed = await openChoiceModal(
     "Adicionar ao Estoque?",
-    `Deseja cadastrar "${productName}" como um produto no seu estoque para vendas futuras?`
+    `Deseja cadastrar "${productName}" como um produto no seu estoque para ${context}?`
   );
   if (!confirmed) return;
   if (!isAdmin()) {
@@ -2092,7 +2125,7 @@ function createSalesReportPdf(title, generatedAt, rows, totalText, paymentSummar
 
   const addHeader = () => {
     lines.push(pdfTextLine(40, y, 12, "ID", true));
-    lines.push(pdfTextLine(80, y, 12, "Data", true));
+    lines.push(pdfTextLine(80, y, 12, "Data/Hora", true));
     lines.push(pdfTextLine(170, y, 12, "Produtos", true));
     lines.push(pdfTextLine(390, y, 12, "Pagamento", true));
     lines.push(pdfTextLine(480, y, 12, "Valor", true));
@@ -2154,7 +2187,7 @@ function createSalesReportPdf(title, generatedAt, rows, totalText, paymentSummar
     newPlainPage();
     lines.push(pdfTextLine(40, y, 13, "ENTRADAS E SAIDAS DO PERIODO", true));
     y -= 24;
-    lines.push(pdfTextLine(40, y, 10, "Data", true));
+    lines.push(pdfTextLine(40, y, 10, "Data/Hora", true));
     lines.push(pdfTextLine(122, y, 10, "Tipo", true));
     lines.push(pdfTextLine(175, y, 10, "Descricao", true));
     lines.push(pdfTextLine(340, y, 10, "Categoria", true));
@@ -2170,7 +2203,7 @@ function createSalesReportPdf(title, generatedAt, rows, totalText, paymentSummar
         lines.push(pdfTextLine(40, y, 13, "ENTRADAS E SAIDAS DO PERIODO", true));
         y -= 24;
       }
-      lines.push(pdfTextLine(40, y, 9, item.timestamp ? dateOnly.format(new Date(item.timestamp)) : "-"));
+      lines.push(pdfTextLine(40, y, 9, item.timestamp ? dateTime.format(new Date(item.timestamp)) : "-"));
       lines.push(pdfTextLine(122, y, 9, transactionKindLabel(item.kind)));
       descLines.forEach((line, index) => lines.push(pdfTextLine(175, y - index * 13, 9, line)));
       lines.push(pdfTextLine(340, y, 9, item.category || "-"));
@@ -2284,7 +2317,7 @@ function openMovementModal(kind) {
       isCancelled: false,
     });
     toast("Movimento salvo.");
-    if (isEntry) return () => promptCreateProductFromManualSale(description);
+    return () => promptCreateProductFromManualMovement(description, isEntry ? "entry" : "exit");
   });
 }
 
