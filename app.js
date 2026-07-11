@@ -937,7 +937,7 @@ function renderDashboard() {
             ${renderGroupedTransactionRows(transactions) || `<p class="muted">Nenhuma transacao registrada.</p>`}
           </div>
         </section>
-        <section class="panel">
+        <section class="panel low-stock-panel">
           <h2>Produtos com Baixo Estoque</h2>
           <div class="transactions">
             ${lowStock.map((item) => `
@@ -1113,7 +1113,7 @@ function renderCash() {
         </article>
       </div>
       <div class="panel">
-        <div class="toolbar"><h2>Movimentos Financeiros</h2><div><button class="btn secondary" data-action="entry-new">${icon("add")} Entrada</button> <button class="btn secondary" data-action="exit-new">${icon("remove")} Saida</button></div></div>
+        <div class="toolbar"><h2>Movimentos Financeiros</h2><div><button class="btn secondary" data-action="entry-new">${icon("add")} Venda manual</button> <button class="btn secondary" data-action="exit-new">${icon("remove")} Saida</button></div></div>
         <div class="transactions transactions-scroll transactions-scroll--cash">${renderGroupedTransactionRows(allTransactions()) || `<p class="muted">Sem movimentos.</p>`}</div>
       </div>
     </section>
@@ -1248,7 +1248,7 @@ function reportFinancialMovements(bounds) {
     kind,
     timestamp: Number(item.timestamp) || 0,
     description: item.description || (kind === "entry" ? "Entrada" : "Saida"),
-    category: item.category || "-",
+    category: String(item.category || "").trim(),
     paymentMethod: item.paymentMethod,
     cashRegisterId: item.cashRegisterId,
     amount: Number(item.amount) || 0,
@@ -1294,17 +1294,29 @@ function reportPeriodLabel(bounds) {
   return startLabel === endLabel ? startLabel : `${startLabel} ate ${endLabel}`;
 }
 
-function reportPaymentTotals(sales) {
-  return sales.reduce((totals, record) => {
+function reportPaymentTotals(sales, financialMovements = []) {
+  const totals = sales.reduce((totals, record) => {
     const amount = saleAmount(record);
     const group = paymentMethodGroup(record);
     totals.total += amount;
+    totals.stock += amount;
     if (group === "PIX") totals.pix += amount;
     else if (group === "CARD") totals.card += amount;
     else if (group === "CASH") totals.cash += amount;
     else totals.other += amount;
     return totals;
-  }, { total: 0, pix: 0, card: 0, cash: 0, other: 0 });
+  }, { total: 0, stock: 0, manual: 0, pix: 0, card: 0, cash: 0, other: 0 });
+  financialMovements.filter((item) => item.kind === "entry" && !item.isCancelled).forEach((item) => {
+    const amount = Number(item.amount) || 0;
+    const group = paymentMethodGroup(item.paymentMethod);
+    totals.total += amount;
+    totals.manual += amount;
+    if (group === "PIX") totals.pix += amount;
+    else if (group === "CARD") totals.card += amount;
+    else if (group === "CASH") totals.cash += amount;
+    else totals.other += amount;
+  });
+  return totals;
 }
 
 function reportConsolidatedRows(sales, financialMovements, manualStockEntries) {
@@ -1314,9 +1326,10 @@ function reportConsolidatedRows(sales, financialMovements, manualStockEntries) {
     return {
       id: saleData(record).id ?? record.docId ?? "-",
       timestamp: saleTimestamp(record),
-      type: paymentMethodGroupLabel(record),
+      type: "VENDA",
+      typeClass: "good",
       description: saleProductNames(record),
-      detail: `Venda #${saleData(record).id ?? record.docId ?? "-"}`,
+      detail: paymentMethodGroupLabel(record),
       quantity: quantity ? formatDecimalInput(quantity) : "-",
       amount: saleAmount(record),
       amountClass: "plus",
@@ -1327,9 +1340,10 @@ function reportConsolidatedRows(sales, financialMovements, manualStockEntries) {
     return {
       id: item.id,
       timestamp: item.timestamp,
-      type: isExit ? "Saida" : "Entrada",
+      type: isExit ? "SAIDA" : "VENDA MANUAL",
+      typeClass: isExit ? "bad" : "manual",
       description: item.description,
-      detail: item.category || paymentMethodLabel(item.paymentMethod),
+      detail: `${paymentMethodGroupLabel(item.paymentMethod)}${item.category && item.category !== "-" ? ` - ${item.category}` : ""}`,
       quantity: "-",
       amount: (isExit ? -1 : 1) * item.amount,
       amountClass: isExit ? "minus" : "plus",
@@ -1352,30 +1366,23 @@ function reportConsolidatedRows(sales, financialMovements, manualStockEntries) {
 function renderReports() {
   const bounds = reportFilterBounds();
   const sales = reportSales(bounds);
-  const paymentTotals = reportPaymentTotals(sales);
+  const financialMovements = reportFinancialMovements(bounds);
+  const paymentTotals = reportPaymentTotals(sales, financialMovements);
   const sold = paymentTotals.total;
   const currentYear = new Date().getFullYear();
   const months = monthNames();
-  const financialMovements = reportFinancialMovements(bounds);
   const manualStockEntries = reportManualStockEntries(bounds);
   const consolidatedRows = reportConsolidatedRows(sales, financialMovements, manualStockEntries);
   const consolidatedTableRows = renderGroupedTableRows(consolidatedRows, 6, renderConsolidatedReportRow);
   const resultClass = "positive";
   const periodLabel = reportPeriodLabel(bounds);
-  const saleCount = sales.length;
+  const manualSaleCount = financialMovements.filter((item) => item.kind === "entry" && !item.isCancelled).length;
   return `
     <section class="section">
-      <article class="panel report-export">
-        <div class="report-action">
-          <div class="report-icon">${icon("picture_as_pdf")}</div>
-          <div>
-            <h2>Exportar Relatorio de Vendas</h2>
-            <p class="muted">Gera um documento PDF detalhado com vendas, produtos e total geral.</p>
-          </div>
-        </div>
+      <article class="panel report-export report-export--sales">
+        <div class="report-action"><h2>Relatorio de vendas</h2></div>
         <div class="report-options">
           <div class="report-option-group">
-            <span class="report-group-label">Filtros</span>
             <div class="report-filter-grid">
               <label class="field report-filter">
                 <span>Periodo</span>
@@ -1409,62 +1416,45 @@ function renderReports() {
             </div>
           </div>
           <div class="report-option-group report-option-group--actions">
-            <span class="report-group-label">Exportar PDF</span>
             <div class="report-export-actions">
-              <button class="btn" data-report-period="daily">${icon("today")} Diario</button>
-              <button class="btn secondary" data-report-period="specificDate">${icon("event")} Dia selecionado</button>
-              <button class="btn" data-report-period="weekly">${icon("date_range")} Semanal</button>
-              <button class="btn secondary" data-report-period="monthly">${icon("download")} Mensal</button>
+              <button class="btn" data-report-period="specificDate">Dia</button>
+              <button class="btn" data-report-period="weekly">Semanal</button>
+              <button class="btn secondary" data-report-period="monthly">Mensal</button>
             </div>
           </div>
         </div>
       </article>
-      <div class="grid cols-2">
-        <article class="panel report-export">
-          <div class="report-action">
-            <div class="report-icon report-icon--sheet">${icon("table_view")}</div>
-            <div>
-              <h2>Exportar Inventario</h2>
-              <p class="muted">Baixa uma planilha CSV com produtos, categorias, fornecedores, precos e estoque.</p>
-            </div>
-          </div>
-          <button class="btn secondary" data-action="export-inventory">${icon("download")} Exportar CSV</button>
-        </article>
-        <article class="panel report-export">
-          <div class="report-action">
-            <div class="report-icon report-icon--backup">${icon("database")}</div>
-            <div>
-              <h2>Backup de Dados</h2>
-              <p class="muted">Gera um JSON com as colecoes do sistema sem expor senhas em claro.</p>
-            </div>
-          </div>
-          <button class="btn secondary" data-action="export-backup">${icon("backup")} Baixar Backup</button>
-        </article>
+      <div class="panel report-secondary-actions">
+        <span>Outras exportacoes</span>
+        <div>
+          <button class="btn secondary" data-action="export-inventory">${icon("table_view")} Inventario CSV</button>
+          <button class="btn secondary" data-action="export-backup">${icon("backup")} Backup JSON</button>
+        </div>
       </div>
       <section class="report-results">
         <article class="report-result-hero report-result-hero--${resultClass}">
           <div>
-            <span>Somatorio de vendas</span>
+            <span>Total de vendas (estoque + manual)</span>
             <strong>${money.format(sold)}</strong>
             <small>${escapeHtml(periodLabel)}</small>
           </div>
           <div class="report-result-icon">${icon("point_of_sale")}</div>
         </article>
         <div class="report-kpi-grid">
-          <article class="report-kpi report-kpi--sales">
-            <span>Total geral</span>
-            <strong>${money.format(sold)}</strong>
-            <small>${saleCount} venda${saleCount === 1 ? "" : "s"}</small>
-          </article>
           <article class="report-kpi report-kpi--entries">
-            <span>Pix</span>
-            <strong>${money.format(paymentTotals.pix)}</strong>
-            <small>Somatorio em Pix</small>
+            <span>Vendas manuais</span>
+            <strong>${money.format(paymentTotals.manual)}</strong>
+            <small>${manualSaleCount} venda${manualSaleCount === 1 ? "" : "s"} sem baixa</small>
           </article>
           <article class="report-kpi report-kpi--exits">
-            <span>Cartao</span>
-            <strong>${money.format(paymentTotals.card)}</strong>
-            <small>Debito e credito</small>
+            <span>Vendas do estoque</span>
+            <strong>${money.format(paymentTotals.stock)}</strong>
+            <small>${sales.length} venda${sales.length === 1 ? "" : "s"} com baixa</small>
+          </article>
+          <article class="report-kpi report-kpi--stock">
+            <span>Pix</span>
+            <strong>${money.format(paymentTotals.pix)}</strong>
+            <small>Total recebido em Pix</small>
           </article>
           <article class="report-kpi report-kpi--stock">
             <span>Dinheiro</span>
@@ -1477,7 +1467,6 @@ function renderReports() {
         <div class="report-section-heading">
           <div>
             <h2>Relatorio Consolidado</h2>
-            <p class="muted">Todas as vendas aparecem na mesma tabela com Pix, Cartao ou Dinheiro na coluna de tipo.</p>
           </div>
           <strong>${money.format(sold)}</strong>
         </div>
@@ -1504,7 +1493,7 @@ function renderConsolidatedReportRow(item) {
   return `
     <tr>
       <td>${item.timestamp ? dateTime.format(new Date(item.timestamp)) : "-"}</td>
-      <td><span class="badge ${item.amountClass === "minus" ? "bad" : "good"}">${escapeHtml(item.type)}</span></td>
+      <td><span class="badge ${escapeHtml(item.typeClass || (item.amountClass === "minus" ? "bad" : "good"))}">${escapeHtml(item.type)}</span></td>
       <td>${escapeHtml(item.description)}${item.isCancelled ? ` <span class="badge bad">CANCELADA</span>` : ""}</td>
       <td>${escapeHtml(item.detail || "-")}</td>
       <td>${escapeHtml(item.quantity || "-")}</td>
@@ -1516,18 +1505,10 @@ function renderConsolidatedReportRow(item) {
 function renderSettings() {
   return `
     <section class="section">
-      <div class="grid cols-2">
-        <article class="panel">
-          <h2>Personalizacao</h2>
-          <p class="muted">Tema visual do site.</p>
-          ${select("themeSelect", "Tema", themeOptions, state.theme)}
-        </article>
-        <article class="panel">
-          <h2>Nuvem e Backup</h2>
-          <p class="muted">${escapeHtml(syncLabel())}</p>
-          <button class="btn secondary" data-action="refresh-data">${icon("sync")} Atualizar dados</button>
-        </article>
-      </div>
+      <article class="panel settings-theme">
+        <h2>Personalizacao</h2>
+        ${select("themeSelect", "Tema", themeOptions, state.theme)}
+      </article>
       ${isAdmin() ? `
         <div class="panel">
           <h2>Gestao do Sistema</h2>
@@ -1542,7 +1523,6 @@ function renderSettings() {
           </div>
         </div>
       ` : ""}
-      <button class="btn danger full" data-action="logout">${icon("logout")} SAIR DO SISTEMA</button>
     </section>
   `;
 }
@@ -2083,8 +2063,8 @@ function exportSalesReport(period) {
   const financialMovements = reportFinancialMovements(bounds);
   const manualStockEntries = reportManualStockEntries(bounds);
   const rows = reportConsolidatedRows(sales, financialMovements, manualStockEntries);
-  const paymentTotals = reportPaymentTotals(sales);
-  const pdf = createSalesReportPdf(report.title, `Data: ${dateTime.format(new Date())}`, rows, paymentTotals);
+  const paymentTotals = reportPaymentTotals(sales, financialMovements);
+  const pdf = createSalesReportPdf(report.title, `Data de exportacao: ${dateTime.format(new Date())}`, rows, paymentTotals);
   downloadBlob(pdf, report.filename, "application/pdf");
   toast("Relatorio exportado.");
 }
@@ -2190,20 +2170,21 @@ function createSalesReportPdf(title, generatedAt, rows, paymentTotals) {
   let lines = [
     pdfTextLine(40, 802, 18, title, true),
     pdfTextLine(40, 775, 11, "Relatorio consolidado de vendas"),
-    pdfTextLine(40, 758, 9, "Uma unica tabela com a forma de pagamento na coluna Tipo de venda."),
-    pdfTextLine(40, 742, 9, generatedAt),
-    pdfTextLine(40, 720, 10, `Total geral: ${totalText}`, true),
-    pdfTextLine(205, 720, 10, `Pix: ${money.format(paymentTotals.pix)}`, true),
-    pdfTextLine(330, 720, 10, `Cartao: ${money.format(paymentTotals.card)}`, true),
-    pdfTextLine(455, 720, 10, `Dinheiro: ${money.format(paymentTotals.cash)}`, true),
+    pdfTextLine(40, 752, 9, generatedAt),
+    pdfTextLine(40, 720, 10, `Total de vendas: ${totalText}`, true),
+    pdfTextLine(225, 720, 10, `Venda manual: ${money.format(paymentTotals.manual)}`, true),
+    pdfTextLine(410, 720, 10, `Venda estoque: ${money.format(paymentTotals.stock)}`, true),
+    pdfTextLine(40, 700, 10, `Pix: ${money.format(paymentTotals.pix)}`, true),
+    pdfTextLine(225, 700, 10, `Dinheiro: ${money.format(paymentTotals.cash)}`, true),
+    pdfTextLine(410, 700, 10, `Cartao: ${money.format(paymentTotals.card)}`, true),
   ];
-  let y = 680;
+  let y = 660;
 
   const addHeader = () => {
     lines.push(pdfTextLine(40, y, 9, "Data/Hora", true));
     lines.push(pdfTextLine(116, y, 9, "Tipo de venda", true));
     lines.push(pdfTextLine(205, y, 9, "Descricao", true));
-    lines.push(pdfTextLine(355, y, 9, "Pag/Cat", true));
+    lines.push(pdfTextLine(355, y, 9, "Pag./Categoria", true));
     lines.push(pdfTextLine(435, y, 9, "Qtde", true));
     lines.push(pdfTextLine(500, y, 9, "Valor", true));
     lines.push(`40 ${y - 8} m 555 ${y - 8} l S`);
@@ -2246,7 +2227,7 @@ function createSalesReportPdf(title, generatedAt, rows, paymentTotals) {
   if (y < 90) newPage();
   lines.push(`40 ${y} m 555 ${y} l S`);
   y -= 22;
-  lines.push(pdfTextLine(350, y, 12, "TOTAL GERAL:", true));
+  lines.push(pdfTextLine(330, y, 12, "TOTAL DE VENDAS:", true));
   lines.push(pdfTextLine(480, y, 12, totalText, true));
   pages.push(lines.join("\n"));
 
@@ -2331,7 +2312,7 @@ async function closeRegister() {
 
 function openMovementModal(kind) {
   const isEntry = kind === "entry";
-  openModal(isEntry ? "Nova Entrada" : "Nova Saida", `
+  openModal(isEntry ? "Nova Venda Manual (sem retirar do estoque)" : "Nova Saida", `
     ${input("description", "Descricao")}
     ${input("amount", "Valor", 0, "number")}
     ${select("paymentMethod", "Pagamento", paymentOptions, "CASH")}
@@ -2349,11 +2330,12 @@ function openMovementModal(kind) {
       amount: parseDecimal(form.get("amount")),
       paymentMethod: form.get("paymentMethod"),
       category: form.get("category") || null,
+      transactionType: isEntry ? "MANUAL_SALE" : "EXIT",
       cashRegisterId: Number(open?.id) || 0,
       isCancelled: false,
     });
-    toast("Movimento salvo.");
-    return () => promptCreateProductFromManualMovement(description, isEntry ? "entry" : "exit");
+    toast(isEntry ? "Venda manual salva sem alterar o estoque." : "Saida salva.");
+    return isEntry ? undefined : () => promptCreateProductFromManualMovement(description, "exit");
   });
 }
 
