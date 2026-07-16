@@ -1,15 +1,19 @@
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-app.js";
+import { initializeApp, deleteApp } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-app.js";
 import {
   getFirestore,
   collection,
   doc,
+  getDoc,
   getDocs,
   onSnapshot,
   query,
+  where,
+  limit,
   setDoc,
   updateDoc,
   deleteDoc,
 } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
+import { getAuth, onAuthStateChanged, setPersistence, browserLocalPersistence, signInWithEmailAndPassword, createUserWithEmailAndPassword, reauthenticateWithCredential, EmailAuthProvider, updatePassword, signOut } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-auth.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyDaNbVpvkGov4vtabbk-bAWOpb7nDpmzrA",
@@ -22,6 +26,7 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
+const auth = getAuth(app);
 const root = document.querySelector("#app");
 
 const collections = {
@@ -59,7 +64,8 @@ function initialTheme() {
 
 const state = {
   user: null,
-  session: JSON.parse(localStorage.getItem("goRegisterSession") || "null"),
+  company: null,
+  authStage: "loading",
   view: "dashboard",
   theme: initialTheme(),
   darkTheme: false,
@@ -90,10 +96,7 @@ const state = {
   firebaseError: "",
   lastSync: null,
 };
-
-if (state.session?.user) {
-  state.user = state.session.user;
-}
+let unsubscribers = [];
 
 const navItems = [
   ["dashboard", "Painel", "dashboard", "all"],
@@ -484,6 +487,22 @@ function isReady() {
   return state.loadedCollections.size >= Object.keys(collections).length && !state.loading;
 }
 
+function tenantId() { return state.company?.id || ""; }
+function tenantPayload(payload) {
+  if (!tenantId()) throw new Error("Empresa não autenticada.");
+  return { ...payload, empresa_id: tenantId() };
+}
+function tenantDocId(id) {
+  if (!tenantId()) throw new Error("Empresa não autenticada.");
+  return `${tenantId()}__${id}`;
+}
+function clearSubscriptions() {
+  unsubscribers.forEach((unsubscribe) => unsubscribe());
+  unsubscribers = [];
+  state.loadedCollections.clear();
+  Object.keys(state.data).forEach((key) => { state.data[key] = []; });
+}
+
 function syncLabel() {
   if (state.firebaseError) return "Erro no Firebase";
   if (!isReady()) return "Sincronizando";
@@ -507,8 +526,14 @@ async function runAction(task, successMessage = "") {
 }
 
 function subscribe() {
+  clearSubscriptions();
+  if (state.authStage !== "user" || !tenantId()) return;
   Object.entries(collections).forEach(([key, name]) => {
-    onSnapshot(query(collection(db, name)), (snapshot) => {
+    if (key === "users" && !isPrivilegedRole(state.user?.role)) {
+      state.loadedCollections.add(key);
+      return;
+    }
+    const unsubscribe = onSnapshot(query(collection(db, name), where("empresa_id", "==", tenantId())), (snapshot) => {
       const dataKey = key === "registers" ? "registers" : key;
       state.data[dataKey] = snapshot.docs.map((item) => ({ ...item.data(), docId: item.id })).sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0));
       if (dataKey === "products") syncCartProducts();
@@ -522,36 +547,20 @@ function subscribe() {
       state.loading = false;
       state.firebaseError = error.message || `Falha ao carregar ${name}.`;
       if (state.user) renderApp();
-      else renderLogin(state.firebaseError);
+      else renderAuthScreen(state.firebaseError);
     });
+    unsubscribers.push(unsubscribe);
   });
 }
 
 function syncSessionUser() {
-  if ((!state.session?.userId && !state.session?.userKey) || !state.session?.sessionToken) return;
-  const user = findUserByKey(state.session.userKey) || findById(state.data.users, state.session.userId);
+  if (!state.user) return;
+  const user = findUserByKey(state.user.docId) || findById(state.data.users, state.user.id);
   if (!user || user.isActive === false) {
-    state.user = null;
-    state.session = null;
-    localStorage.removeItem("goRegisterSession");
+    exitCompany();
     return;
   }
-  const sessionToken = user.sessionToken || state.session.sessionToken || randomToken();
   state.user = safeSessionUser(user);
-  state.session = buildSession(user, sessionToken);
-  localStorage.setItem("goRegisterSession", JSON.stringify(state.session));
-  if (!user.sessionToken) {
-    updateDoc(doc(db, collections.users, docKey(user)), { sessionToken }).catch(() => {});
-  }
-}
-
-function buildSession(user, sessionToken) {
-  return {
-    userId: Number(user?.id) || null,
-    userKey: docKey(user),
-    sessionToken,
-    user: safeSessionUser(user),
-  };
 }
 
 function syncCartProducts() {
@@ -567,137 +576,74 @@ function syncCartProducts() {
     .filter((item) => item && item.quantity > 0);
 }
 
-function renderLogin(error = "") {
+function renderAuthScreen(error = "") {
+  if (state.authStage === "company") return renderUserLogin(error);
+  return renderCompanyLogin(error);
+}
+
+function renderCompanyLogin(error = "") {
   root.innerHTML = `
     <main class="login-shell">
-      <form class="login-card" id="loginForm">
+      <form class="login-card" id="companyLoginForm">
         <img class="login-logo" src="./assets/goregisterlogo.png" alt="GO REGISTER" />
         <h1 class="login-title">GO REGISTER</h1>
+        <p class="muted login-subtitle">Selecione sua empresa para continuar</p>
         <label class="field">
-          <span>Usuario</span>
-          <span class="input-wrap">${icon("person")}<input name="username" autocomplete="username" placeholder="Usuario" required /></span>
-        </label>
-        <label class="field">
-          <span>Senha</span>
-          <span class="input-wrap">${icon("key")}<input name="password" type="password" autocomplete="current-password" placeholder="Senha" required /></span>
+          <span>Empresa</span>
+          <span class="input-wrap">${icon("domain")}<input name="identifier" autocomplete="organization" placeholder="Código, CNPJ ou acesso" required /></span>
         </label>
         <p class="error">${escapeHtml(error)}</p>
-        <button class="btn full" type="submit">Entrar</button>
+        <button class="btn full" type="submit">Continuar</button>
       </form>
     </main>
   `;
-
-  document.querySelector("#loginForm").addEventListener("submit", async (event) => {
+  document.querySelector("#companyLoginForm").addEventListener("submit", async (event) => {
     event.preventDefault();
+    const button = event.currentTarget.querySelector("button");
+    button.disabled = true; button.textContent = "Verificando...";
     const form = new FormData(event.currentTarget);
-    await login(form.get("username"), form.get("password"));
+    try {
+      const identifier = String(form.get("identifier") || "").trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+      const snapshot = await getDocs(query(collection(db, "companies"), where("identifierNormalized", "==", identifier), where("isActive", "==", true), limit(1)));
+      if (snapshot.empty) throw new Error("Empresa não encontrada ou desativada.");
+      const companyDoc = snapshot.docs[0];
+      state.company = { id: companyDoc.id, ...companyDoc.data() };
+      state.authStage = "company";
+      sessionStorage.setItem("goRegisterCompany", JSON.stringify(state.company));
+      renderUserLogin();
+    } catch (loginError) {
+      renderCompanyLogin(loginError.message || "Não foi possível autenticar a empresa.");
+    }
   });
-
 }
 
-async function login(username, password) {
-  try {
-    const normalizedUsername = String(username || "").trim();
-    const rawPassword = String(password || "");
-    const snap = await getDocs(collection(db, collections.users));
-    const users = snap.docs.map((item) => ({ ...item.data(), docId: item.id }));
-    if (!users.length) {
-      await createFirstMasterAdmin(normalizedUsername, rawPassword);
-      return;
-    }
-    const user = users.find((item) => item.username === normalizedUsername && item.isActive !== false);
-    if (!user || !(await verifyPassword(rawPassword, user.passwordHash))) {
-      if (isDefaultAdminLogin(normalizedUsername, rawPassword)) {
-        await recoverDefaultMasterAdmin(users);
-        return;
-      }
-      renderLogin("Usuario ou senha invalidos");
-      return;
-    }
-    const sessionToken = randomToken();
-    const patch = { sessionToken, lastLoginAt: Date.now() };
-    if (!isModernPasswordHash(user.passwordHash)) patch.passwordHash = await hashPassword(rawPassword);
-    if (user.username === "admin" && user.role !== "MASTER_ADMIN") patch.role = "MASTER_ADMIN";
-    await updateDoc(doc(db, collections.users, docKey(user)), patch);
-    const loggedUser = { ...user, ...patch };
-    state.user = safeSessionUser(loggedUser);
-    state.session = buildSession(loggedUser, sessionToken);
-    state.firebaseError = "";
-    localStorage.setItem("goRegisterSession", JSON.stringify(state.session));
-    localStorage.removeItem("goRegisterUser");
-    renderApp();
-  } catch (error) {
-    state.firebaseError = error.message || "Falha ao entrar.";
-    renderLogin(state.firebaseError);
-  }
-}
-
-function isDefaultAdminLogin(username, password) {
-  return username === defaultAdmin.username && password === defaultAdmin.password;
+function renderUserLogin(error = "") {
+  root.innerHTML = `<main class="login-shell"><form class="login-card" id="userLoginForm">
+    <img class="login-logo" src="./assets/goregisterlogo.png" alt="GO REGISTER" />
+    <span class="company-login-badge">${icon("domain")} ${escapeHtml(state.company?.name || "Empresa")}</span>
+    <h1 class="login-title">Entrar na conta</h1>
+    <label class="field"><span>Usuário</span><span class="input-wrap">${icon("person")}<input name="username" autocomplete="username" required /></span></label>
+    <label class="field"><span>Senha</span><span class="input-wrap">${icon("key")}<input name="password" type="password" autocomplete="current-password" required /></span></label>
+    <p class="error">${escapeHtml(error)}</p><button class="btn full" type="submit">Entrar</button>
+    <button class="btn secondary full" type="button" id="changeCompany">Trocar empresa</button>
+  </form></main>`;
+  document.querySelector("#changeCompany").addEventListener("click", exitCompany);
+  document.querySelector("#userLoginForm").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = event.currentTarget.querySelector("button[type=submit]");
+    button.disabled = true; button.textContent = "Entrando...";
+    const form = new FormData(event.currentTarget);
+    try {
+      const username = String(form.get("username") || "").trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+      const aliasSnapshot = await getDoc(doc(db, "login_aliases", `${tenantId()}__${username}`));
+      if (!aliasSnapshot.exists() || aliasSnapshot.data().empresa_id !== tenantId()) throw new Error("Usuário ou senha inválidos.");
+      await signInWithEmailAndPassword(auth, aliasSnapshot.data().email, String(form.get("password") || ""));
+    } catch (loginError) { renderUserLogin(loginError.message || "Usuário ou senha inválidos."); }
+  });
 }
 
 function isAllowedPassword(password) {
   return String(password || "").length >= 6 || String(password || "") === defaultAdmin.password;
-}
-
-async function recoverDefaultMasterAdmin(users = state.data.users) {
-  const existing = users.find((item) => item.username === defaultAdmin.username);
-  const id = Number(existing?.id) || nextId(users);
-  const sessionToken = randomToken();
-  const user = {
-    ...existing,
-    id,
-    username: defaultAdmin.username,
-    passwordHash: await hashPassword(defaultAdmin.password),
-    role: "MASTER_ADMIN",
-    isActive: true,
-    sessionToken,
-    createdAt: existing?.createdAt || Date.now(),
-    lastLoginAt: Date.now(),
-  };
-  const { docId, ...storedUser } = user;
-  await setDoc(doc(db, collections.users, docKey(existing, id)), storedUser);
-  state.user = safeSessionUser(user);
-  state.session = buildSession({ ...user, docId: docKey(existing, id) }, sessionToken);
-  state.firebaseError = "";
-  localStorage.setItem("goRegisterSession", JSON.stringify(state.session));
-  localStorage.removeItem("goRegisterUser");
-  renderApp();
-}
-
-async function createFirstMasterAdmin(username, password) {
-  const normalizedUsername = String(username || "").trim();
-  const rawPassword = String(password || "");
-  if (normalizedUsername.length < 3 || !isAllowedPassword(rawPassword)) {
-    renderLogin("Primeiro acesso: informe usuario com 3+ caracteres e senha com 6+ caracteres.");
-    return;
-  }
-  const sessionToken = randomToken();
-  const user = {
-    id: 1,
-    username: normalizedUsername,
-    passwordHash: await hashPassword(rawPassword),
-    role: "MASTER_ADMIN",
-    isActive: true,
-    sessionToken,
-    createdAt: Date.now(),
-    lastLoginAt: Date.now(),
-  };
-  await setDoc(doc(db, collections.users, "1"), user);
-  state.user = safeSessionUser(user);
-  state.session = buildSession({ ...user, docId: "1" }, sessionToken);
-  state.firebaseError = "";
-  localStorage.setItem("goRegisterSession", JSON.stringify(state.session));
-  localStorage.removeItem("goRegisterUser");
-  renderApp();
-}
-
-async function authorizeAdminCredentials(username, password) {
-  const user = state.data.users.find((item) => item.username === username && item.isActive !== false && isPrivilegedRole(item.role));
-  if (!user) {
-    return false;
-  }
-  return await verifyPassword(password, user.passwordHash);
 }
 
 function appSetting(id) {
@@ -744,18 +690,28 @@ async function changeCancellationPassword() {
       updatedAt: Date.now(),
       updatedBy: Number(currentUser()?.id) || 0,
     };
-    await setDoc(doc(db, collections.settings, "cancellation"), setting);
-    state.data.settings = [...state.data.settings.filter((item) => docKey(item, item.id) !== "cancellation"), { ...setting, docId: "cancellation" }];
+    await setDoc(doc(db, collections.settings, tenantDocId("cancellation")), tenantPayload({ ...setting, id: "cancellation" }));
+    state.data.settings = [...state.data.settings.filter((item) => item.id !== "cancellation"), { ...setting, id: "cancellation", empresa_id: tenantId(), docId: tenantDocId("cancellation") }];
   }, "Senha de cancelamento alterada.");
 }
 
-function logout() {
+async function logout() {
   state.user = null;
-  state.session = null;
+  clearSubscriptions();
+  await signOut(auth);
+}
+
+async function exitCompany() {
+  state.user = null;
+  state.company = null;
+  state.authStage = "none";
+  clearSubscriptions();
   localStorage.removeItem("goRegisterSession");
   localStorage.removeItem("goRegisterUser");
+  sessionStorage.removeItem("goRegisterCompany");
   state.cart = [];
-  renderLogin();
+  await signOut(auth).catch(() => {});
+  renderCompanyLogin();
 }
 
 function renderApp(focusId = null) {
@@ -767,6 +723,7 @@ function renderApp(focusId = null) {
           <img src="./assets/goregisterlogo.png" alt="" />
           <strong>GO REGISTER</strong>
         </div>
+        <div class="active-company">${icon("domain")}<span><small>Empresa</small><strong>${escapeHtml(state.company?.name || "-")}</strong></span></div>
         <nav class="nav">
           ${availableNavItems().map(([id, label, glyph]) => `<button data-view="${id}" class="${state.view === id ? "active" : ""}">${icon(glyph)} ${label}</button>`).join("")}
         </nav>
@@ -812,7 +769,7 @@ function renderView() {
         <button class="icon-btn sidebar-toggle" type="button" data-action="toggle-sidebar" title="${state.sidebarCollapsed ? "Mostrar painel lateral" : "Esconder painel lateral"}" aria-label="${state.sidebarCollapsed ? "Mostrar painel lateral" : "Esconder painel lateral"}">
           ${icon(state.sidebarCollapsed ? "menu_open" : "menu")}
         </button>
-        <h1>${title}</h1>
+        <h1>${title}</h1><span class="topbar-company">${escapeHtml(state.company?.name || "")}</span>
       </div>
       <div>${actions}</div>
     </header>
@@ -1523,6 +1480,7 @@ function renderSettings() {
           </div>
         </div>
       ` : ""}
+      <div class="panel danger-zone"><h2>Sessão da empresa</h2><button class="settings-row" data-action="exit-company">${icon("domain_disabled")}<span><strong>Sair da empresa</strong><small>Encerra a conta e remove a empresa ativa deste dispositivo</small></span></button></div>
     </section>
   `;
 }
@@ -1738,6 +1696,7 @@ const actions = {
   "export-inventory": () => exportInventoryCsv(),
   "export-backup": () => exportBackupJson(),
   "cancel-password": () => changeCancellationPassword(),
+  "exit-company": () => exitCompany(),
   "clear-cash-history-filter": () => {
     state.filters.cashHistoryDate = "";
     renderApp();
@@ -1881,7 +1840,7 @@ function openProductModal(product = null) {
       minStockThreshold: parseDecimal(form.get("minStockThreshold")) || 5,
       unit: form.get("unit") || "UN",
     };
-    await setDoc(doc(db, collections.products, String(id)), payload);
+    await setDoc(doc(db, collections.products, tenantDocId(id)), tenantPayload(payload));
     toast("Produto salvo.");
   });
 }
@@ -1890,7 +1849,7 @@ function openNameModal(title, collectionName, items, item = null) {
   if (!isAdmin()) return toast("Acesso restrito ao administrador.");
   const id = item?.id || nextId(items);
   openModal(item ? `Editar ${title}` : `Nova ${title}`, input("name", "Nome", item?.name || ""), async (form) => {
-    await setDoc(doc(db, collectionName, String(id)), { id, name: form.get("name") });
+    await setDoc(doc(db, collectionName, tenantDocId(id)), tenantPayload({ id, name: form.get("name") }));
     toast(`${title} salva.`);
   });
 }
@@ -1903,7 +1862,7 @@ function openSupplierModal(item = null) {
     ${input("contact", "Contato", item?.contact || "")}
     ${input("email", "Email", item?.email || "", "email")}
   `, async (form) => {
-    await setDoc(doc(db, collections.suppliers, String(id)), { id, name: form.get("name"), contact: form.get("contact") || null, email: form.get("email") || null });
+    await setDoc(doc(db, collections.suppliers, tenantDocId(id)), tenantPayload({ id, name: form.get("name"), contact: form.get("contact") || null, email: form.get("email") || null }));
     toast("Fornecedor salvo.");
   });
 }
@@ -1917,6 +1876,7 @@ function openUserModal(item = null) {
     : [["OPERATOR", "Funcionario"]];
   openModal(item ? "Editar Usuario" : "Novo Usuario", `
     ${input("username", "Usuario", item?.username || "")}
+    ${item ? "" : input("email", "E-mail de acesso", "", "email")}
     ${item ? "" : input("password", "Senha", "", "password")}
     ${select("role", "Perfil", roleOptions, item?.role || "OPERATOR")}
     ${select("isActive", "Status", [["true", "Ativo"], ["false", "Inativo"]], item?.isActive === false ? "false" : "true")}
@@ -1926,15 +1886,28 @@ function openUserModal(item = null) {
     if (username.length < 3) throw new Error("Informe um usuario com pelo menos 3 caracteres.");
     const password = String(form.get("password") || "");
     if (!item && !isAllowedPassword(password)) throw new Error("Informe uma senha com pelo menos 6 caracteres, ou use a senha padrao admin.");
-    await setDoc(doc(db, collections.users, docKey(item, id)), {
+    let userDocId = item ? docKey(item, id) : "";
+    if (!item) {
+      const secondaryApp = initializeApp(firebaseConfig, `create-user-${Date.now()}`);
+      try {
+        const credential = await createUserWithEmailAndPassword(getAuth(secondaryApp), String(form.get("email") || "").trim(), password);
+        userDocId = credential.user.uid;
+      } finally {
+        await signOut(getAuth(secondaryApp)).catch(() => {});
+        await deleteApp(secondaryApp);
+      }
+    }
+    await setDoc(doc(db, collections.users, userDocId), tenantPayload({
       id,
       username,
-      passwordHash: item ? item.passwordHash : await hashPassword(password),
+      email: item?.email || String(form.get("email") || "").trim(),
+      usernameNormalized: username.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase(),
       role,
       isActive: form.get("isActive") === "true",
-      sessionToken: item?.sessionToken || "",
       createdAt: item?.createdAt || Date.now(),
-    });
+    }));
+    const aliasId = `${tenantId()}__${username.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()}`;
+    await setDoc(doc(db, "login_aliases", aliasId), tenantPayload({ uid: userDocId, email: item?.email || String(form.get("email") || "").trim(), username }));
     toast("Usuario salvo.");
   });
 }
@@ -1944,25 +1917,20 @@ async function changeUserPassword(userKey) {
   const user = findUserByKey(userKey);
   if (!user) return toast("Usuario nao encontrado.");
   if (!canManageUser(user)) return toast("Apenas o administrador mestre pode alterar senha de administradores.");
-  const form = await openFormDialog(`Alterar Senha`, `
-    <p class="muted">Usuario: ${escapeHtml(user.username)}</p>
-    ${input("password", "Nova senha", "", "password")}
+  if (!sameUser(user, state.user)) return toast("Cada usuário deve alterar a própria senha em sua conta.");
+  const form = await openFormDialog("Alterar senha", `
+    ${input("currentPassword", "Senha atual", "", "password")}
+    ${input("newPassword", "Nova senha", "", "password")}
   `, "Alterar senha", "lock");
   if (!form) return;
-  const password = String(form.get("password") || "");
-  if (!password) return;
-  if (!isAllowedPassword(password)) return toast("A senha deve ter pelo menos 6 caracteres, ou use admin.");
-  const sessionToken = randomToken();
-  await runAction(
-    async () => {
-      await updateDoc(doc(db, collections.users, docKey(user, userKey)), { passwordHash: await hashPassword(password), sessionToken });
-      if (sameUser(user, state.user)) {
-        state.session = buildSession({ ...user, docId: docKey(user, userKey), sessionToken }, sessionToken);
-        localStorage.setItem("goRegisterSession", JSON.stringify(state.session));
-      }
-    },
-    "Senha alterada."
-  );
+  const currentPassword = String(form.get("currentPassword") || "");
+  const newPassword = String(form.get("newPassword") || "");
+  if (newPassword.length < 6) return toast("A nova senha deve ter pelo menos 6 caracteres.");
+  await runAction(async () => {
+    const credential = EmailAuthProvider.credential(auth.currentUser.email, currentPassword);
+    await reauthenticateWithCredential(auth.currentUser, credential);
+    await updatePassword(auth.currentUser, newPassword);
+  }, "Senha alterada.");
 }
 
 async function toggleUser(userKey) {
@@ -2286,7 +2254,7 @@ function openRegisterModal() {
       userId: Number(state.user.id) || 0,
       isOpen: true,
     };
-    await setDoc(doc(db, collections.registers, String(id)), register);
+    await setDoc(doc(db, collections.registers, tenantDocId(id)), tenantPayload(register));
     state.data.registers = [...state.data.registers.filter((item) => Number(item.id) !== Number(id)), register];
     toast("Caixa aberto.");
   });
@@ -2323,7 +2291,7 @@ function openMovementModal(kind) {
     const open = state.data.registers.find((item) => item.isOpen);
     const id = nextId(list);
     const description = String(form.get("description") || "").trim();
-    await setDoc(doc(db, collectionName, String(id)), {
+    await setDoc(doc(db, collectionName, tenantDocId(id)), tenantPayload({
       id,
       timestamp: Date.now(),
       description,
@@ -2333,7 +2301,7 @@ function openMovementModal(kind) {
       transactionType: isEntry ? "MANUAL_SALE" : "EXIT",
       cashRegisterId: Number(open?.id) || 0,
       isCancelled: false,
-    });
+    }));
     toast(isEntry ? "Venda manual salva sem alterar o estoque." : "Saida salva.");
     return isEntry ? undefined : () => promptCreateProductFromManualMovement(description, "exit");
   });
@@ -2421,7 +2389,7 @@ async function checkout(paymentMethod) {
     unitPrice: Number(item.product.sellingPrice) || 0,
     subtotal: (Number(item.product.sellingPrice) || 0) * item.quantity,
   }));
-  await setDoc(doc(db, collections.sales, String(id)), { sale, items });
+  await setDoc(doc(db, collections.sales, tenantDocId(id)), tenantPayload({ sale: { ...sale, empresa_id: tenantId() }, items }));
   await Promise.all(state.cart.map((item) => {
     const updatedStock = Math.max(0, (Number(item.product.stockQuantity) || 0) - item.quantity);
     return Promise.all([
@@ -2445,22 +2413,55 @@ async function updateProductStock(productId, stockQuantity) {
 
 async function saveStockMovement(productId, quantity, type, reason) {
   const id = nextId(state.data.stockMovements);
-  await setDoc(doc(db, collections.stockMovements, String(id)), {
+  await setDoc(doc(db, collections.stockMovements, tenantDocId(id)), tenantPayload({
     id,
     productId: Number(productId),
     timestamp: Date.now(),
     quantity,
     type,
     reason,
-  });
+  }));
 }
 
 async function init() {
   applyTheme();
   state.view = getRouteView();
-  if (state.user) renderApp();
-  else renderLogin();
-  subscribe();
+  await setPersistence(auth, browserLocalPersistence);
+  onAuthStateChanged(auth, async (firebaseUser) => {
+    if (!firebaseUser) {
+      state.user = null;
+      clearSubscriptions();
+      const cachedCompany = JSON.parse(sessionStorage.getItem("goRegisterCompany") || "null");
+      if (cachedCompany?.id) {
+        state.company = cachedCompany;
+        state.authStage = "company";
+        renderUserLogin();
+      } else {
+        state.authStage = "none";
+        state.company = null;
+        renderCompanyLogin();
+      }
+      return;
+    }
+    try {
+      const profileSnapshot = await getDoc(doc(db, "users", firebaseUser.uid));
+      if (!profileSnapshot.exists() || profileSnapshot.data().isActive === false) throw new Error("Usuário sem acesso ativo.");
+      const profile = { ...profileSnapshot.data(), docId: profileSnapshot.id, uid: firebaseUser.uid };
+      const selectedCompany = JSON.parse(sessionStorage.getItem("goRegisterCompany") || "null");
+      if (!selectedCompany?.id || selectedCompany.id !== profile.empresa_id) throw new Error("Este usuário não pertence à empresa selecionada.");
+      const companySnapshot = await getDoc(doc(db, "companies", profile.empresa_id));
+      if (!companySnapshot.exists() || companySnapshot.data().isActive === false) throw new Error("Empresa inexistente ou desativada.");
+      state.company = { id: companySnapshot.id, ...companySnapshot.data() };
+      state.user = profile;
+      state.authStage = "user";
+      state.loading = true;
+      renderApp();
+      subscribe();
+    } catch (error) {
+      await signOut(auth);
+      renderUserLogin(error.message || "Acesso negado.");
+    }
+  });
 }
 
 window.addEventListener("hashchange", () => {

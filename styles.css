@@ -1928,3 +1928,4 @@ body.dark .transaction-row .amount.minus {
     overflow-wrap: anywhere;
   }
 }
+.login-subtitle{text-align:center;margin-top:-8px}.company-login-badge,.active-company{display:flex;align-items:center;gap:9px}.company-login-badge{width:max-content;max-width:100%;margin:0 auto 14px;padding:8px 12px;border-radius:999px;background:var(--primary-soft);color:var(--primary);font-weight:700}.active-company{margin:8px 10px 18px;padding:10px;border-radius:12px;background:rgba(255,255,255,.08)}.active-company span{min-width:0;display:grid}.active-company small{opacity:.65}.active-company strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.topbar-company{display:inline-flex;padding:5px 9px;border-radius:999px;background:var(--primary-soft);color:var(--primary);font-size:.78rem;font-weight:700}.danger-zone{margin-top:18px}.danger-zone .settings-row{color:#c2410c}@media(max-width:720px){.topbar-company{display:none}.active-company{margin-inline:4px}}
