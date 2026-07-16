@@ -622,7 +622,7 @@ function renderUserLogin(error = "") {
     <img class="login-logo" src="./assets/goregisterlogo.png" alt="GO REGISTER" />
     <span class="company-login-badge">${icon("domain")} ${escapeHtml(state.company?.name || "Empresa")}</span>
     <h1 class="login-title">Entrar na conta</h1>
-    <label class="field"><span>Usuário</span><span class="input-wrap">${icon("person")}<input name="username" autocomplete="username" required /></span></label>
+    <label class="field"><span>Usuário ou e-mail</span><span class="input-wrap">${icon("person")}<input name="username" autocomplete="username" required /></span></label>
     <label class="field"><span>Senha</span><span class="input-wrap">${icon("key")}<input name="password" type="password" autocomplete="current-password" required /></span></label>
     <p class="error">${escapeHtml(error)}</p><button class="btn full" type="submit">Entrar</button>
     <button class="btn secondary full" type="button" id="changeCompany">Trocar empresa</button>
@@ -634,10 +634,15 @@ function renderUserLogin(error = "") {
     button.disabled = true; button.textContent = "Entrando...";
     const form = new FormData(event.currentTarget);
     try {
-      const username = String(form.get("username") || "").trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-      const aliasSnapshot = await getDoc(doc(db, "login_aliases", `${tenantId()}__${username}`));
-      if (!aliasSnapshot.exists() || aliasSnapshot.data().empresa_id !== tenantId()) throw new Error("Usuário ou senha inválidos.");
-      await signInWithEmailAndPassword(auth, aliasSnapshot.data().email, String(form.get("password") || ""));
+      const login = String(form.get("username") || "").trim();
+      let email = login;
+      if (!login.includes("@")) {
+        const username = login.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+        const aliasSnapshot = await getDoc(doc(db, "login_aliases", `${tenantId()}__${username}`));
+        if (!aliasSnapshot.exists() || aliasSnapshot.data().empresa_id !== tenantId()) throw new Error("Usuário ou senha inválidos.");
+        email = aliasSnapshot.data().email;
+      }
+      await signInWithEmailAndPassword(auth, email, String(form.get("password") || ""));
     } catch (loginError) { renderUserLogin(loginError.message || "Usuário ou senha inválidos."); }
   });
 }
