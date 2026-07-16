@@ -2,3 +2,9 @@ mobile
 .agents
 .codex
 .README_INTERNO.md
+node_modules
+firebase-debug.log
+firestore-debug.log
+goregister-*-firebase-adminsdk-*.json
+admin
+arquivos_codex
