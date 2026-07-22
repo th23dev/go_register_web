@@ -488,6 +488,19 @@ function isReady() {
 }
 
 function tenantId() { return state.company?.id || ""; }
+function cachedCompany() {
+  try {
+    return JSON.parse(localStorage.getItem("goRegisterCompany") || sessionStorage.getItem("goRegisterCompany") || "null");
+  } catch {
+    localStorage.removeItem("goRegisterCompany");
+    sessionStorage.removeItem("goRegisterCompany");
+    return null;
+  }
+}
+function persistCompany(company) {
+  localStorage.setItem("goRegisterCompany", JSON.stringify(company));
+  sessionStorage.removeItem("goRegisterCompany");
+}
 function tenantPayload(payload) {
   if (!tenantId()) throw new Error("Empresa não autenticada.");
   return { ...payload, empresa_id: tenantId() };
@@ -609,7 +622,7 @@ function renderCompanyLogin(error = "") {
       const companyDoc = snapshot.docs[0];
       state.company = { id: companyDoc.id, ...companyDoc.data() };
       state.authStage = "company";
-      sessionStorage.setItem("goRegisterCompany", JSON.stringify(state.company));
+      persistCompany(state.company);
       renderUserLogin();
     } catch (loginError) {
       renderCompanyLogin(loginError.message || "Não foi possível autenticar a empresa.");
@@ -713,6 +726,7 @@ async function exitCompany() {
   clearSubscriptions();
   localStorage.removeItem("goRegisterSession");
   localStorage.removeItem("goRegisterUser");
+  localStorage.removeItem("goRegisterCompany");
   sessionStorage.removeItem("goRegisterCompany");
   state.cart = [];
   await signOut(auth).catch(() => {});
@@ -2438,9 +2452,9 @@ async function init() {
     if (!firebaseUser) {
       state.user = null;
       clearSubscriptions();
-      const cachedCompany = JSON.parse(sessionStorage.getItem("goRegisterCompany") || "null");
-      if (cachedCompany?.id) {
-        state.company = cachedCompany;
+      const company = cachedCompany();
+      if (company?.id) {
+        state.company = company;
         state.authStage = "company";
         renderUserLogin();
       } else {
@@ -2454,11 +2468,10 @@ async function init() {
       const profileSnapshot = await getDoc(doc(db, "users", firebaseUser.uid));
       if (!profileSnapshot.exists() || profileSnapshot.data().isActive === false) throw new Error("Usuário sem acesso ativo.");
       const profile = { ...profileSnapshot.data(), docId: profileSnapshot.id, uid: firebaseUser.uid };
-      const selectedCompany = JSON.parse(sessionStorage.getItem("goRegisterCompany") || "null");
-      if (!selectedCompany?.id || selectedCompany.id !== profile.empresa_id) throw new Error("Este usuário não pertence à empresa selecionada.");
       const companySnapshot = await getDoc(doc(db, "companies", profile.empresa_id));
       if (!companySnapshot.exists() || companySnapshot.data().isActive === false) throw new Error("Empresa inexistente ou desativada.");
       state.company = { id: companySnapshot.id, ...companySnapshot.data() };
+      persistCompany(state.company);
       state.user = profile;
       state.authStage = "user";
       state.loading = true;
