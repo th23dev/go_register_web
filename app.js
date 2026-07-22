@@ -2270,6 +2270,7 @@ function downloadBlob(blob, filename, type) {
 function openRegisterModal() {
   openModal("Abrir Caixa", input("initialBalance", "Saldo inicial", 0, "number"), async (form) => {
     const id = nextId(state.data.registers);
+    const registerDocumentId = tenantDocId(id);
     const register = {
       id,
       openingTimestamp: Date.now(),
@@ -2279,8 +2280,8 @@ function openRegisterModal() {
       userId: Number(state.user.id) || 0,
       isOpen: true,
     };
-    await setDoc(doc(db, collections.registers, tenantDocId(id)), tenantPayload(register));
-    state.data.registers = [...state.data.registers.filter((item) => Number(item.id) !== Number(id)), register];
+    await setDoc(doc(db, collections.registers, registerDocumentId), tenantPayload(register));
+    state.data.registers = [...state.data.registers.filter((item) => Number(item.id) !== Number(id)), { ...register, empresa_id: tenantId(), docId: registerDocumentId }];
     toast("Caixa aberto.");
   });
 }
@@ -2297,7 +2298,7 @@ async function closeRegister() {
       closingBalance: parseDecimal(closing),
       isOpen: false,
     };
-    await updateDoc(doc(db, collections.registers, String(open.id)), patch);
+    await updateDoc(doc(db, collections.registers, open.docId || tenantDocId(open.id)), patch);
     state.data.registers = state.data.registers.map((item) => Number(item.id) === Number(open.id) ? { ...item, ...patch } : item);
     renderApp();
   }, "Caixa fechado.");
