@@ -649,7 +649,11 @@ function renderUserLogin(error = "") {
     try {
       const login = String(form.get("username") || "").trim();
       let email = login;
-      if (!login.includes("@")) {
+      if (login.includes("@")) {
+        const emailHash = await sha256Hex(login.toLowerCase());
+        const aliasSnapshot = await getDoc(doc(db, "login_aliases", `${tenantId()}__email__${emailHash}`));
+        if (aliasSnapshot.exists() && aliasSnapshot.data().empresa_id === tenantId()) email = aliasSnapshot.data().email;
+      } else {
         const username = login.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
         const aliasSnapshot = await getDoc(doc(db, "login_aliases", `${tenantId()}__${username}`));
         if (!aliasSnapshot.exists() || aliasSnapshot.data().empresa_id !== tenantId()) throw new Error("Usuário ou senha inválidos.");
