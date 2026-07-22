@@ -2468,6 +2468,10 @@ async function init() {
       const profileSnapshot = await getDoc(doc(db, "users", firebaseUser.uid));
       if (!profileSnapshot.exists() || profileSnapshot.data().isActive === false) throw new Error("Usuário sem acesso ativo.");
       const profile = { ...profileSnapshot.data(), docId: profileSnapshot.id, uid: firebaseUser.uid };
+      const selectedCompany = cachedCompany();
+      if (selectedCompany?.id && selectedCompany.id !== profile.empresa_id) {
+        throw new Error("Este usuário não pertence à empresa selecionada.");
+      }
       const companySnapshot = await getDoc(doc(db, "companies", profile.empresa_id));
       if (!companySnapshot.exists() || companySnapshot.data().isActive === false) throw new Error("Empresa inexistente ou desativada.");
       state.company = { id: companySnapshot.id, ...companySnapshot.data() };
