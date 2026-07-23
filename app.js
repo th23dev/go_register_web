@@ -583,7 +583,7 @@ function syncCartProducts() {
       if (!freshProduct) return null;
       return {
         product: freshProduct,
-        quantity: Math.min(item.quantity, Number(freshProduct.stockQuantity) || 0),
+        quantity: productTracksStock(freshProduct) ? Math.min(item.quantity, Number(freshProduct.stockQuantity) || 0) : item.quantity,
       };
     })
     .filter((item) => item && item.quantity > 0);
@@ -891,7 +891,7 @@ function renderDashboard() {
     ? (todayCents === 0 ? "Sem variacao em relacao a ontem" : "Sem base de comparacao ontem")
     : `${comparison >= 0 ? "↑" : "↓"} ${Math.abs(comparison).toFixed(1)}% em relacao a ontem`;
   const todayCount = transactions.filter((item) => !item.isCancelled && item.timestamp >= todayStart && item.timestamp < todayEnd).length;
-  const lowStock = state.data.products.filter((item) => Number(item.stockQuantity) <= Number(item.minStockThreshold));
+  const lowStock = state.data.products.filter((item) => productTracksStock(item) && Number(item.stockQuantity) <= Number(item.minStockThreshold));
 
   return `
     <section class="section">
@@ -974,10 +974,12 @@ function renderPos() {
         <h3>Produtos Disponiveis</h3>
         <div class="product-list">
           ${filtered.map((product) => {
-            const out = Number(product.stockQuantity) <= 0;
+            const tracksStock = productTracksStock(product);
+            const out = tracksStock && Number(product.stockQuantity) <= 0;
+            const stockLabel = tracksStock ? String(Number(product.stockQuantity) || 0) : "Ilimitado";
             return `
               <button class="product-row ${out ? "out" : ""}" data-add-cart="${product.id}">
-                <span><strong>${escapeHtml(product.name)}</strong><span class="muted"><br>${money.format(product.sellingPrice || 0)} / ${escapeHtml(product.unit || "UN")} · Estoque: ${Number(product.stockQuantity) || 0}</span></span>
+                <span><strong>${escapeHtml(product.name)}</strong><span class="muted"><br>${money.format(product.sellingPrice || 0)} / ${escapeHtml(product.unit || "UN")} · Estoque: ${stockLabel}</span></span>
                 ${out ? `<span class="badge bad">ESGOTADO</span>` : icon("add")}
               </button>
             `;
@@ -1018,14 +1020,16 @@ function renderInventory() {
   return tableSection("inventorySearch", ["Produto", "Categoria", "Fornecedor", "Preco", "Estoque", ""], rows.map((item) => {
     const category = state.data.categories.find((cat) => Number(cat.id) === Number(item.categoryId));
     const supplier = state.data.suppliers.find((sup) => Number(sup.id) === Number(item.supplierId));
-    const low = Number(item.stockQuantity) <= Number(item.minStockThreshold);
+    const tracksStock = productTracksStock(item);
+    const low = tracksStock && Number(item.stockQuantity) <= Number(item.minStockThreshold);
+    const stockLabel = tracksStock ? `${Number(item.stockQuantity) || 0} ${escapeHtml(item.unit || "UN")}` : "Ilimitado";
     return `
       <tr>
         <td><strong>${escapeHtml(item.name)}</strong><div class="muted">EAN: ${escapeHtml(item.barcode || "-")}</div></td>
         <td>${escapeHtml(category?.name || "-")}</td>
         <td>${escapeHtml(supplier?.name || "-")}</td>
         <td>${money.format(item.sellingPrice || 0)}</td>
-        <td><span class="badge ${low ? "warn" : "good"}">${Number(item.stockQuantity) || 0} ${escapeHtml(item.unit || "UN")}</span></td>
+        <td><span class="badge ${low ? "warn" : "good"}">${stockLabel}</span></td>
         <td><button class="icon-btn" data-edit-product="${item.id}" title="Editar">${icon("edit")}</button><button class="icon-btn" data-delete-product="${item.id}" title="Excluir">${icon("delete")}</button></td>
       </tr>
     `;
@@ -1579,6 +1583,10 @@ function findById(items, id) {
   return items.find((item) => Number(item.id) === Number(id));
 }
 
+function productTracksStock(product) {
+  return product?.tracksStock !== false;
+}
+
 function docKey(item, fallbackId = null) {
   return String(item?.docId ?? item?.id ?? fallbackId ?? "");
 }
@@ -1604,13 +1612,13 @@ async function addCart(productId) {
   if (!product) return;
   const existing = state.cart.find((item) => Number(item.product.id) === Number(productId));
   if (existing) {
-    if (existing.quantity + 1 > Number(product.stockQuantity || 0)) {
+    if (productTracksStock(product) && existing.quantity + 1 > Number(product.stockQuantity || 0)) {
       await promptAddStockForProduct(product);
       return;
     }
     existing.quantity += 1;
   } else {
-    if (Number(product.stockQuantity || 0) < 1) {
+    if (productTracksStock(product) && Number(product.stockQuantity || 0) < 1) {
       await promptAddStockForProduct(product);
       return;
     }
@@ -1633,7 +1641,7 @@ function changeCartQty(productId, delta) {
     removeCart(productId);
     return;
   }
-  if (nextQty > Number(item.product.stockQuantity || 0)) {
+  if (productTracksStock(item.product) && nextQty > Number(item.product.stockQuantity || 0)) {
     promptAddStockForProduct(item.product);
     return;
   }
@@ -1649,7 +1657,7 @@ async function setCartQty(productId, value) {
     removeCart(productId);
     return;
   }
-  if (nextQty > Number(item.product.stockQuantity || 0)) {
+  if (productTracksStock(item.product) && nextQty > Number(item.product.stockQuantity || 0)) {
     renderApp();
     await promptAddStockForProduct(item.product);
     return;
@@ -1846,11 +1854,13 @@ function openProductModal(product = null) {
       ${select("supplierId", "Fornecedor", [["", "-"], ...state.data.suppliers.map((item) => [item.id, item.name])], product?.supplierId || "")}
       ${input("costPrice", "Preco de custo", product?.costPrice || 0, "number")}
       ${input("sellingPrice", "Preco de venda", product?.sellingPrice || 0, "number")}
+      ${select("tracksStock", "O produto possui estoque?", [["true", "Sim, controlar quantidade"], ["false", "Não, estoque ilimitado"]], String(productTracksStock(product)))}
       ${input("stockQuantity", "Estoque", product?.stockQuantity || 0, "number")}
       ${input("minStockThreshold", "Estoque minimo", product?.minStockThreshold || 5, "number")}
       ${input("unit", "Unidade", product?.unit || "UN")}
     </div>
   `, async (form) => {
+    const tracksStock = form.get("tracksStock") !== "false";
     const payload = {
       id,
       name: form.get("name"),
@@ -1859,13 +1869,27 @@ function openProductModal(product = null) {
       supplierId: form.get("supplierId") ? Number(form.get("supplierId")) : null,
       costPrice: parseDecimal(form.get("costPrice")),
       sellingPrice: parseDecimal(form.get("sellingPrice")),
-      stockQuantity: parseDecimal(form.get("stockQuantity")),
-      minStockThreshold: parseDecimal(form.get("minStockThreshold")) || 5,
+      tracksStock,
+      stockQuantity: tracksStock ? parseDecimal(form.get("stockQuantity")) : 0,
+      minStockThreshold: tracksStock ? (parseDecimal(form.get("minStockThreshold")) || 5) : 0,
       unit: form.get("unit") || "UN",
     };
     await setDoc(doc(db, collections.products, tenantDocId(id)), tenantPayload(payload));
     toast("Produto salvo.");
   });
+  const stockControl = document.querySelector('#modalRoot [name="tracksStock"]');
+  const syncStockFields = () => {
+    const enabled = stockControl?.value !== "false";
+    ["stockQuantity", "minStockThreshold"].forEach((name) => {
+      const field = document.querySelector(`#modalRoot [name="${name}"]`);
+      if (field) {
+        field.disabled = !enabled;
+        field.closest("label").style.display = enabled ? "" : "none";
+      }
+    });
+  };
+  stockControl?.addEventListener("change", syncStockFields);
+  syncStockFields();
 }
 
 function openNameModal(title, collectionName, items, item = null) {
@@ -2072,7 +2096,7 @@ function exportInventoryCsv() {
     toast("Acesso restrito ao administrador.");
     return;
   }
-  const headers = ["ID", "Produto", "Codigo de barras", "Categoria", "Fornecedor", "Preco de custo", "Preco de venda", "Estoque", "Estoque minimo", "Unidade"];
+  const headers = ["ID", "Produto", "Codigo de barras", "Categoria", "Fornecedor", "Preco de custo", "Preco de venda", "Controla estoque", "Estoque", "Estoque minimo", "Unidade"];
   const rows = state.data.products
     .slice()
     .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "pt-BR"))
@@ -2087,8 +2111,9 @@ function exportInventoryCsv() {
         supplier?.name || "",
         Number(product.costPrice) || 0,
         Number(product.sellingPrice) || 0,
-        Number(product.stockQuantity) || 0,
-        Number(product.minStockThreshold) || 0,
+        productTracksStock(product) ? "Sim" : "Não",
+        productTracksStock(product) ? (Number(product.stockQuantity) || 0) : "Ilimitado",
+        productTracksStock(product) ? (Number(product.minStockThreshold) || 0) : "-",
         product.unit || "UN",
       ];
     });
@@ -2335,8 +2360,11 @@ function openMovementModal(kind) {
 
 function openStockAdjustModal(selectedProduct = null) {
   if (!isAdmin()) return toast("Acesso restrito ao administrador.");
+  if (selectedProduct && !productTracksStock(selectedProduct)) return toast("Este produto possui estoque ilimitado e não precisa de ajuste.");
+  const stockProducts = state.data.products.filter(productTracksStock);
+  if (!stockProducts.length) return toast("Nenhum produto com controle de estoque cadastrado.");
   openModal("Ajustar Estoque", `
-    ${select("productId", "Produto", state.data.products.map((item) => [item.id, `${item.name} (${item.stockQuantity} ${item.unit || "UN"})`]), selectedProduct?.id || "")}
+    ${select("productId", "Produto", stockProducts.map((item) => [item.id, `${item.name} (${item.stockQuantity} ${item.unit || "UN"})`]), selectedProduct?.id || "")}
     ${select("type", "Tipo", [["ENTRY", "Entrada"], ["EXIT", "Saida"], ["ADJUSTMENT", "Ajuste absoluto"]], "ENTRY")}
     ${input("quantity", "Quantidade", 1, "number")}
     ${input("reason", "Motivo", selectedProduct ? `Entrada para venda de ${selectedProduct.name}` : "Ajuste manual")}
@@ -2369,6 +2397,7 @@ async function cancelTransaction(kind, id) {
       const saleId = saleData(record).id ?? id;
       await updateDoc(doc(db, collections.sales, docKey(record, id)), { "sale.isCancelled": true, isCancelled: true });
       await Promise.all(saleItems(record).map(async (item) => {
+        if (item.tracksStock === false) return;
         const productId = item.productId ?? item.product_id;
         const product = findById(state.data.products, productId);
         if (!product) return;
@@ -2412,11 +2441,12 @@ async function checkout(paymentMethod) {
     saleId: id,
     productId: Number(item.product.id),
     quantity: item.quantity,
+    tracksStock: productTracksStock(item.product),
     unitPrice: Number(item.product.sellingPrice) || 0,
     subtotal: (Number(item.product.sellingPrice) || 0) * item.quantity,
   }));
   await setDoc(doc(db, collections.sales, tenantDocId(id)), tenantPayload({ sale: { ...sale, empresa_id: tenantId() }, items }));
-  await Promise.all(state.cart.map((item) => {
+  await Promise.all(state.cart.filter((item) => productTracksStock(item.product)).map((item) => {
     const updatedStock = Math.max(0, (Number(item.product.stockQuantity) || 0) - item.quantity);
     return Promise.all([
       updateProductStock(item.product.id, updatedStock),
