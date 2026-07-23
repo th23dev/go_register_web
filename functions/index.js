@@ -34,7 +34,9 @@ exports.updateCompanyUserPassword = onCall({ region: "southamerica-east1" }, asy
     throw new HttpsError("invalid-argument", "A senha deve ter entre 6 e 128 caracteres.");
   }
 
-  const userReference = database.doc(`users/${uid}`);
+  const companyId = String(request.data?.companyId || "").trim();
+  if (!companyId) throw new HttpsError("invalid-argument", "Empresa inválida.");
+  const userReference = database.doc(`companies/${companyId}/users/${uid}`);
   const userSnapshot = await userReference.get();
   if (!userSnapshot.exists || !userSnapshot.data().empresa_id) {
     throw new HttpsError("not-found", "Usuário de empresa não encontrado.");
@@ -57,7 +59,7 @@ exports.resetCompanyCancellationPassword = onCall({ region: "southamerica-east1"
   if (password.length < 6 || password.length > 128) throw new HttpsError("invalid-argument", "A senha deve ter entre 6 e 128 caracteres.");
   const salt = randomBytes(24).toString("hex");
   const hash = createHash("sha256").update(`${salt}:${password}`).digest("hex");
-  await getFirestore().doc(`settings/${companyId}__cancellation`).set({id:"cancellation",empresa_id:companyId,passwordHash:`sha256$${salt}$${hash}`,updatedAt:Date.now(),updatedByPlatformAdmin:request.auth.uid},{merge:true});
+  await getFirestore().doc(`companies/${companyId}/settings/cancellation`).set({id:"cancellation",empresa_id:companyId,passwordHash:`sha256$${salt}$${hash}`,updatedAt:Date.now(),updatedByPlatformAdmin:request.auth.uid},{merge:true});
   return { success: true };
 });
 
@@ -69,7 +71,7 @@ exports.clearCompanyData = onCall({ region: "southamerica-east1", timeoutSeconds
   const writer = database.bulkWriter();
   let deletedDocuments = 0;
   for (const collectionName of tenantCollections) {
-    const snapshot = await database.collection(collectionName).where("empresa_id", "==", companyId).get();
+    const snapshot = await database.collection(`companies/${companyId}/${collectionName}`).get();
     snapshot.docs.forEach((documentSnapshot) => { writer.delete(documentSnapshot.ref); deletedDocuments += 1; });
   }
   await writer.close();

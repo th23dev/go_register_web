@@ -507,7 +507,14 @@ function tenantPayload(payload) {
 }
 function tenantDocId(id) {
   if (!tenantId()) throw new Error("Empresa não autenticada.");
-  return `${tenantId()}__${id}`;
+  return String(id);
+}
+function tenantCollection(collectionName) {
+  if (!tenantId()) throw new Error("Empresa não autenticada.");
+  return collection(db, "companies", tenantId(), collectionName);
+}
+function tenantDocument(collectionName, id) {
+  return doc(tenantCollection(collectionName), String(id));
 }
 function clearSubscriptions() {
   unsubscribers.forEach((unsubscribe) => unsubscribe());
@@ -546,7 +553,7 @@ function subscribe() {
       state.loadedCollections.add(key);
       return;
     }
-    const unsubscribe = onSnapshot(query(collection(db, name), where("empresa_id", "==", tenantId())), (snapshot) => {
+    const unsubscribe = onSnapshot(tenantCollection(name), (snapshot) => {
       const dataKey = key === "registers" ? "registers" : key;
       state.data[dataKey] = snapshot.docs.map((item) => ({ ...item.data(), docId: item.id })).sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0));
       if (dataKey === "products") syncCartProducts();
@@ -712,7 +719,7 @@ async function changeCancellationPassword() {
       updatedAt: Date.now(),
       updatedBy: Number(currentUser()?.id) || 0,
     };
-    await setDoc(doc(db, collections.settings, tenantDocId("cancellation")), tenantPayload({ ...setting, id: "cancellation" }));
+    await setDoc(tenantDocument(collections.settings, "cancellation"), tenantPayload({ ...setting, id: "cancellation" }));
     state.data.settings = [...state.data.settings.filter((item) => item.id !== "cancellation"), { ...setting, id: "cancellation", empresa_id: tenantId(), docId: tenantDocId("cancellation") }];
   }, "Senha de cancelamento alterada.");
 }
@@ -976,7 +983,7 @@ function renderPos() {
           ${filtered.map((product) => {
             const tracksStock = productTracksStock(product);
             const out = tracksStock && Number(product.stockQuantity) <= 0;
-            const stockLabel = tracksStock ? String(Number(product.stockQuantity) || 0) : "Ilimitado";
+            const stockLabel = tracksStock ? String(Number(product.stockQuantity) || 0) : "∞";
             return `
               <button class="product-row ${out ? "out" : ""}" data-add-cart="${product.id}">
                 <span><strong>${escapeHtml(product.name)}</strong><span class="muted"><br>${money.format(product.sellingPrice || 0)} / ${escapeHtml(product.unit || "UN")} · Estoque: ${stockLabel}</span></span>
@@ -1022,7 +1029,7 @@ function renderInventory() {
     const supplier = state.data.suppliers.find((sup) => Number(sup.id) === Number(item.supplierId));
     const tracksStock = productTracksStock(item);
     const low = tracksStock && Number(item.stockQuantity) <= Number(item.minStockThreshold);
-    const stockLabel = tracksStock ? `${Number(item.stockQuantity) || 0} ${escapeHtml(item.unit || "UN")}` : "Ilimitado";
+    const stockLabel = tracksStock ? `${Number(item.stockQuantity) || 0} ${escapeHtml(item.unit || "UN")}` : "∞";
     return `
       <tr>
         <td><strong>${escapeHtml(item.name)}</strong><div class="muted">EAN: ${escapeHtml(item.barcode || "-")}</div></td>
@@ -1584,6 +1591,7 @@ function findById(items, id) {
 }
 
 function productTracksStock(product) {
+  if (typeof product?.hasStockControl === "boolean") return product.hasStockControl;
   return product?.tracksStock !== false;
 }
 
@@ -1602,7 +1610,7 @@ async function removeDoc(collectionName, id) {
   }
   if (!(await openConfirmModal("Excluir Registro", "Tem certeza que deseja excluir este registro?", "Excluir"))) return;
   await runAction(
-    () => deleteDoc(doc(db, collectionName, String(id))),
+    () => deleteDoc(tenantDocument(collectionName, id)),
     "Registro excluido."
   );
 }
@@ -1854,13 +1862,13 @@ function openProductModal(product = null) {
       ${select("supplierId", "Fornecedor", [["", "-"], ...state.data.suppliers.map((item) => [item.id, item.name])], product?.supplierId || "")}
       ${input("costPrice", "Preco de custo", product?.costPrice || 0, "number")}
       ${input("sellingPrice", "Preco de venda", product?.sellingPrice || 0, "number")}
-      ${select("tracksStock", "O produto possui estoque?", [["true", "Sim, controlar quantidade"], ["false", "Não, estoque ilimitado"]], String(productTracksStock(product)))}
+      ${select("hasStockControl", "Controlar estoque?", [["true", "Sim, controlar quantidade"], ["false", "Não, estoque infinito"]], String(productTracksStock(product)))}
       ${input("stockQuantity", "Estoque", product?.stockQuantity || 0, "number")}
       ${input("minStockThreshold", "Estoque minimo", product?.minStockThreshold || 5, "number")}
       ${input("unit", "Unidade", product?.unit || "UN")}
     </div>
   `, async (form) => {
-    const tracksStock = form.get("tracksStock") !== "false";
+    const hasStockControl = form.get("hasStockControl") !== "false";
     const payload = {
       id,
       name: form.get("name"),
@@ -1869,15 +1877,16 @@ function openProductModal(product = null) {
       supplierId: form.get("supplierId") ? Number(form.get("supplierId")) : null,
       costPrice: parseDecimal(form.get("costPrice")),
       sellingPrice: parseDecimal(form.get("sellingPrice")),
-      tracksStock,
-      stockQuantity: tracksStock ? parseDecimal(form.get("stockQuantity")) : 0,
-      minStockThreshold: tracksStock ? (parseDecimal(form.get("minStockThreshold")) || 5) : 0,
+      hasStockControl,
+      tracksStock: hasStockControl,
+      stockQuantity: hasStockControl ? parseDecimal(form.get("stockQuantity")) : 0,
+      minStockThreshold: hasStockControl ? (parseDecimal(form.get("minStockThreshold")) || 5) : 0,
       unit: form.get("unit") || "UN",
     };
-    await setDoc(doc(db, collections.products, tenantDocId(id)), tenantPayload(payload));
+    await setDoc(tenantDocument(collections.products, id), tenantPayload(payload));
     toast("Produto salvo.");
   });
-  const stockControl = document.querySelector('#modalRoot [name="tracksStock"]');
+  const stockControl = document.querySelector('#modalRoot [name="hasStockControl"]');
   const syncStockFields = () => {
     const enabled = stockControl?.value !== "false";
     ["stockQuantity", "minStockThreshold"].forEach((name) => {
@@ -1896,7 +1905,7 @@ function openNameModal(title, collectionName, items, item = null) {
   if (!isAdmin()) return toast("Acesso restrito ao administrador.");
   const id = item?.id || nextId(items);
   openModal(item ? `Editar ${title}` : `Nova ${title}`, input("name", "Nome", item?.name || ""), async (form) => {
-    await setDoc(doc(db, collectionName, tenantDocId(id)), tenantPayload({ id, name: form.get("name") }));
+    await setDoc(tenantDocument(collectionName, id), tenantPayload({ id, name: form.get("name") }));
     toast(`${title} salva.`);
   });
 }
@@ -1909,7 +1918,7 @@ function openSupplierModal(item = null) {
     ${input("contact", "Contato", item?.contact || "")}
     ${input("email", "Email", item?.email || "", "email")}
   `, async (form) => {
-    await setDoc(doc(db, collections.suppliers, tenantDocId(id)), tenantPayload({ id, name: form.get("name"), contact: form.get("contact") || null, email: form.get("email") || null }));
+    await setDoc(tenantDocument(collections.suppliers, id), tenantPayload({ id, name: form.get("name"), contact: form.get("contact") || null, email: form.get("email") || null }));
     toast("Fornecedor salvo.");
   });
 }
@@ -1946,7 +1955,7 @@ function openUserModal(item = null) {
         await deleteApp(secondaryApp);
       }
     }
-    await setDoc(doc(db, collections.users, userDocId), tenantPayload({
+    await setDoc(tenantDocument(collections.users, userDocId), tenantPayload({
       id,
       username,
       email,
@@ -1989,7 +1998,7 @@ async function toggleUser(userKey) {
   if (sameUser(user, state.user)) return toast("Voce nao pode inativar seu proprio usuario.");
   if (!canManageUser(user)) return toast("Apenas o administrador mestre pode alterar status de administradores.");
   await runAction(
-    () => updateDoc(doc(db, collections.users, docKey(user, userKey)), { isActive: user.isActive === false }),
+    () => updateDoc(tenantDocument(collections.users, docKey(user, userKey)), { isActive: user.isActive === false }),
     user.isActive === false ? "Usuario ativado." : "Usuario inativado."
   );
 }
@@ -2002,7 +2011,7 @@ async function deleteUser(userKey) {
   if (!canManageUser(user)) return toast("Apenas o administrador mestre pode excluir administradores.");
   if (!(await openConfirmModal("Excluir Usuario", `Tem certeza que deseja excluir ${user.username}?`, "Excluir"))) return;
   await runAction(
-    () => deleteDoc(doc(db, collections.users, docKey(user, userKey))),
+    () => deleteDoc(tenantDocument(collections.users, docKey(user, userKey))),
     "Registro excluido."
   );
 }
@@ -2112,7 +2121,7 @@ function exportInventoryCsv() {
         Number(product.costPrice) || 0,
         Number(product.sellingPrice) || 0,
         productTracksStock(product) ? "Sim" : "Não",
-        productTracksStock(product) ? (Number(product.stockQuantity) || 0) : "Ilimitado",
+        productTracksStock(product) ? (Number(product.stockQuantity) || 0) : "∞",
         productTracksStock(product) ? (Number(product.minStockThreshold) || 0) : "-",
         product.unit || "UN",
       ];
@@ -2305,7 +2314,7 @@ function openRegisterModal() {
       userId: Number(state.user.id) || 0,
       isOpen: true,
     };
-    await setDoc(doc(db, collections.registers, registerDocumentId), tenantPayload(register));
+    await setDoc(tenantDocument(collections.registers, registerDocumentId), tenantPayload(register));
     state.data.registers = [...state.data.registers.filter((item) => Number(item.id) !== Number(id)), { ...register, empresa_id: tenantId(), docId: registerDocumentId }];
     toast("Caixa aberto.");
   });
@@ -2323,7 +2332,7 @@ async function closeRegister() {
       closingBalance: parseDecimal(closing),
       isOpen: false,
     };
-    await updateDoc(doc(db, collections.registers, open.docId || tenantDocId(open.id)), patch);
+    await updateDoc(tenantDocument(collections.registers, open.docId || tenantDocId(open.id)), patch);
     state.data.registers = state.data.registers.map((item) => Number(item.id) === Number(open.id) ? { ...item, ...patch } : item);
     renderApp();
   }, "Caixa fechado.");
@@ -2342,7 +2351,7 @@ function openMovementModal(kind) {
     const open = state.data.registers.find((item) => item.isOpen);
     const id = nextId(list);
     const description = String(form.get("description") || "").trim();
-    await setDoc(doc(db, collectionName, tenantDocId(id)), tenantPayload({
+    await setDoc(tenantDocument(collectionName, id), tenantPayload({
       id,
       timestamp: Date.now(),
       description,
@@ -2395,7 +2404,7 @@ async function cancelTransaction(kind, id) {
       const record = state.data.sales.find((item) => String(docKey(item, saleData(item).id)) === String(id) || String(saleData(item).id ?? "") === String(id));
       if (!record) throw new Error("Venda nao encontrada.");
       const saleId = saleData(record).id ?? id;
-      await updateDoc(doc(db, collections.sales, docKey(record, id)), { "sale.isCancelled": true, isCancelled: true });
+      await updateDoc(tenantDocument(collections.sales, docKey(record, id)), { "sale.isCancelled": true, isCancelled: true });
       await Promise.all(saleItems(record).map(async (item) => {
         if (item.tracksStock === false) return;
         const productId = item.productId ?? item.product_id;
@@ -2409,12 +2418,12 @@ async function cancelTransaction(kind, id) {
     if (kind === "entry") {
       const record = state.data.entries.find((item) => String(docKey(item, item.id)) === String(id) || String(item.id ?? "") === String(id));
       if (!record) throw new Error("Entrada nao encontrada.");
-      await updateDoc(doc(db, collections.entries, docKey(record, id)), { isCancelled: true });
+      await updateDoc(tenantDocument(collections.entries, docKey(record, id)), { isCancelled: true });
     }
     if (kind === "exit") {
       const record = state.data.exits.find((item) => String(docKey(item, item.id)) === String(id) || String(item.id ?? "") === String(id));
       if (!record) throw new Error("Saida nao encontrada.");
-      await updateDoc(doc(db, collections.exits, docKey(record, id)), { isCancelled: true });
+      await updateDoc(tenantDocument(collections.exits, docKey(record, id)), { isCancelled: true });
     }
   }, "Transacao cancelada.");
 }
@@ -2445,7 +2454,7 @@ async function checkout(paymentMethod) {
     unitPrice: Number(item.product.sellingPrice) || 0,
     subtotal: (Number(item.product.sellingPrice) || 0) * item.quantity,
   }));
-  await setDoc(doc(db, collections.sales, tenantDocId(id)), tenantPayload({ sale: { ...sale, empresa_id: tenantId() }, items }));
+  await setDoc(tenantDocument(collections.sales, id), tenantPayload({ sale: { ...sale, empresa_id: tenantId() }, items }));
   await Promise.all(state.cart.filter((item) => productTracksStock(item.product)).map((item) => {
     const updatedStock = Math.max(0, (Number(item.product.stockQuantity) || 0) - item.quantity);
     return Promise.all([
@@ -2463,13 +2472,13 @@ async function updateProductStock(productId, stockQuantity) {
   const product = findById(state.data.products, productId);
   const productKey = docKey(product, productId);
   if (!productKey) throw new Error("Produto nao encontrado para atualizar o estoque.");
-  await updateDoc(doc(db, collections.products, productKey), { stockQuantity });
+  await updateDoc(tenantDocument(collections.products, productKey), { stockQuantity });
   state.data.products = state.data.products.map((item) => Number(item.id) === Number(productId) ? { ...item, stockQuantity } : item);
 }
 
 async function saveStockMovement(productId, quantity, type, reason) {
   const id = nextId(state.data.stockMovements);
-  await setDoc(doc(db, collections.stockMovements, tenantDocId(id)), tenantPayload({
+  await setDoc(tenantDocument(collections.stockMovements, id), tenantPayload({
     id,
     productId: Number(productId),
     timestamp: Date.now(),
@@ -2500,10 +2509,12 @@ async function init() {
       return;
     }
     try {
-      const profileSnapshot = await getDoc(doc(db, "users", firebaseUser.uid));
+      const selectedCompany = cachedCompany();
+      if (!selectedCompany?.id) throw new Error("Selecione a empresa novamente.");
+      state.company = selectedCompany;
+      const profileSnapshot = await getDoc(tenantDocument(collections.users, firebaseUser.uid));
       if (!profileSnapshot.exists() || profileSnapshot.data().isActive === false) throw new Error("Usuário sem acesso ativo.");
       const profile = { ...profileSnapshot.data(), docId: profileSnapshot.id, uid: firebaseUser.uid };
-      const selectedCompany = cachedCompany();
       if (selectedCompany?.id && selectedCompany.id !== profile.empresa_id) {
         throw new Error("Este usuário não pertence à empresa selecionada.");
       }

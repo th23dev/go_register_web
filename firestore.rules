@@ -8,25 +8,25 @@ service cloud.firestore {
         && (!('isActive' in get(/databases/$(database)/documents/platform_admins/$(request.auth.uid)).data)
           || get(/databases/$(database)/documents/platform_admins/$(request.auth.uid)).data.isActive == true);
     }
-    function profile() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    function activeCompany(companyId) {
+      return exists(/databases/$(database)/documents/companies/$(companyId))
+        && get(/databases/$(database)/documents/companies/$(companyId)).data.isActive == true;
     }
-    function tenantUser() {
+    function companyProfile(companyId) {
+      return get(/databases/$(database)/documents/companies/$(companyId)/users/$(request.auth.uid)).data;
+    }
+    function companyUser(companyId) {
       return signedIn()
-        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
-        && profile().empresa_id is string
-        && (!('isActive' in profile()) || profile().isActive == true);
+        && activeCompany(companyId)
+        && exists(/databases/$(database)/documents/companies/$(companyId)/users/$(request.auth.uid))
+        && (!('isActive' in companyProfile(companyId)) || companyProfile(companyId).isActive == true);
     }
-    function tenantId() { return profile().empresa_id; }
-    function tenantAdmin() { return tenantUser() && profile().role in ['ADMIN', 'MASTER_ADMIN']; }
-    function activeTenant() {
-      return tenantUser()
-        && exists(/databases/$(database)/documents/companies/$(tenantId()))
-        && get(/databases/$(database)/documents/companies/$(tenantId())).data.isActive == true;
+    function companyAdmin(companyId) {
+      return companyUser(companyId) && companyProfile(companyId).role in ['ADMIN', 'MASTER_ADMIN'];
     }
-    function owns(data) { return activeTenant() && data.empresa_id == tenantId(); }
-    function createsOwned() { return activeTenant() && request.resource.data.empresa_id == tenantId(); }
-    function keepsOwner() { return request.resource.data.empresa_id == resource.data.empresa_id; }
+    function belongsToCompany(data, companyId) {
+      return !('empresa_id' in data) || data.empresa_id == companyId;
+    }
 
     match /platform_admins/{uid} {
       allow read, create, update: if platformAdmin();
@@ -36,34 +36,49 @@ service cloud.firestore {
     match /companies/{companyId} {
       allow read: if resource.data.isActive == true || platformAdmin();
       allow create, update, delete: if platformAdmin();
-    }
 
-    match /users/{uid} {
-      allow read: if platformAdmin() || (tenantUser() && (request.auth.uid == uid || (tenantAdmin() && resource.data.empresa_id == tenantId())));
-      allow create: if platformAdmin() || (tenantAdmin() && request.resource.data.empresa_id == tenantId());
-      allow update: if platformAdmin() || (tenantAdmin() && resource.data.empresa_id == tenantId() && keepsOwner());
-      allow delete: if platformAdmin() || (tenantAdmin() && resource.data.empresa_id == tenantId() && request.auth.uid != uid);
+      match /users/{uid} {
+        allow read: if platformAdmin() || (companyUser(companyId)
+          && (request.auth.uid == uid || companyAdmin(companyId)));
+        allow create: if platformAdmin() || (companyAdmin(companyId)
+          && belongsToCompany(request.resource.data, companyId));
+        allow update: if platformAdmin() || (companyAdmin(companyId)
+          && belongsToCompany(resource.data, companyId)
+          && belongsToCompany(request.resource.data, companyId));
+        allow delete: if platformAdmin() || (companyAdmin(companyId)
+          && request.auth.uid != uid && belongsToCompany(resource.data, companyId));
+      }
+
+      match /settings/{documentId} {
+        allow read: if platformAdmin() || companyUser(companyId);
+        allow create, update: if platformAdmin() || (companyAdmin(companyId)
+          && belongsToCompany(request.resource.data, companyId));
+        allow delete: if platformAdmin() || (companyAdmin(companyId)
+          && belongsToCompany(resource.data, companyId));
+      }
+
+      match /{collectionName}/{documentId} {
+        allow read: if collectionName in ['products', 'sales', 'categories', 'suppliers',
+          'cash_registers', 'financial_entries', 'financial_exits', 'stock_movements']
+          && (platformAdmin() || companyUser(companyId));
+        allow create, update: if collectionName in ['products', 'sales', 'categories', 'suppliers',
+          'cash_registers', 'financial_entries', 'financial_exits', 'stock_movements']
+          && (platformAdmin() || (companyUser(companyId)
+            && belongsToCompany(request.resource.data, companyId)));
+        allow delete: if collectionName in ['products', 'sales', 'categories', 'suppliers',
+          'cash_registers', 'financial_entries', 'financial_exits', 'stock_movements']
+          && (platformAdmin() || (companyUser(companyId)
+            && belongsToCompany(resource.data, companyId)));
+      }
     }
 
     match /login_aliases/{aliasId} {
-      allow get: if resource.data.empresa_id is string
-        && exists(/databases/$(database)/documents/companies/$(resource.data.empresa_id))
-        && get(/databases/$(database)/documents/companies/$(resource.data.empresa_id)).data.isActive == true;
+      allow get: if resource.data.empresa_id is string && activeCompany(resource.data.empresa_id);
       allow list: if false;
-      allow create, update: if platformAdmin() || (tenantAdmin() && request.resource.data.empresa_id == tenantId());
-      allow delete: if platformAdmin() || (tenantAdmin() && resource.data.empresa_id == tenantId());
-    }
-
-    match /settings/{documentId} {
-      allow read: if platformAdmin() || owns(resource.data);
-      allow create: if platformAdmin() || (tenantAdmin() && createsOwned());
-      allow update, delete: if platformAdmin() || (tenantAdmin() && owns(resource.data) && keepsOwner());
-    }
-
-    match /{collectionName}/{documentId} {
-      allow read: if collectionName in ['products', 'sales', 'categories', 'suppliers', 'cash_registers', 'financial_entries', 'financial_exits', 'stock_movements'] && (platformAdmin() || owns(resource.data));
-      allow create: if collectionName in ['products', 'sales', 'categories', 'suppliers', 'cash_registers', 'financial_entries', 'financial_exits', 'stock_movements'] && (platformAdmin() || createsOwned());
-      allow update, delete: if collectionName in ['products', 'sales', 'categories', 'suppliers', 'cash_registers', 'financial_entries', 'financial_exits', 'stock_movements'] && (platformAdmin() || (owns(resource.data) && keepsOwner()));
+      allow create, update: if platformAdmin() || (request.resource.data.empresa_id is string
+        && companyAdmin(request.resource.data.empresa_id));
+      allow delete: if platformAdmin() || (resource.data.empresa_id is string
+        && companyAdmin(resource.data.empresa_id));
     }
 
     match /{document=**} { allow read, write: if false; }
