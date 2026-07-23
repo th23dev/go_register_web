@@ -633,7 +633,9 @@ function renderCompanyLogin(error = "") {
     button.disabled = true; button.textContent = "Verificando...";
     const form = new FormData(event.currentTarget);
     try {
-      const identifier = String(form.get("identifier") || "").trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+      const identifierInput = String(form.get("identifier") || "").trim();
+      const identifierDigits = identifierInput.replace(/\D/g, "");
+      const identifier = identifierDigits || identifierInput.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
       const snapshot = await getDocs(query(collection(db, "companies"), where("identifierNormalized", "==", identifier), where("isActive", "==", true), limit(1)));
       if (snapshot.empty) throw new Error("Empresa não encontrada ou desativada.");
       const companyDoc = snapshot.docs[0];
