@@ -38,10 +38,13 @@ service cloud.firestore {
       allow create, update, delete: if platformAdmin();
 
       match /users/{uid} {
-        allow read: if platformAdmin() || (companyUser(companyId)
-          && (request.auth.uid == uid || companyAdmin(companyId)));
-        allow create: if platformAdmin() || (companyAdmin(companyId)
-          && belongsToCompany(request.resource.data, companyId));
+        allow read: if platformAdmin()
+          || (signedIn() && activeCompany(companyId) && request.auth.uid == uid)
+          || (companyUser(companyId) && companyAdmin(companyId));
+        allow create: if platformAdmin()
+          || (signedIn() && activeCompany(companyId) && request.auth.uid == uid
+            && belongsToCompany(request.resource.data, companyId))
+          || (companyAdmin(companyId) && belongsToCompany(request.resource.data, companyId));
         allow update: if platformAdmin() || (companyAdmin(companyId)
           && belongsToCompany(resource.data, companyId)
           && belongsToCompany(request.resource.data, companyId));
@@ -70,6 +73,12 @@ service cloud.firestore {
           && (platformAdmin() || (companyUser(companyId)
             && belongsToCompany(resource.data, companyId)));
       }
+    }
+
+    // Compatibilidade temporária para perfis criados antes da migração por empresa.
+    match /users/{uid} {
+      allow read: if platformAdmin() || (signedIn() && request.auth.uid == uid);
+      allow create, update, delete: if false;
     }
 
     match /login_aliases/{aliasId} {

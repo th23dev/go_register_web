@@ -2522,9 +2522,28 @@ async function init() {
       const selectedCompany = cachedCompany();
       if (!selectedCompany?.id) throw new Error("Selecione a empresa novamente.");
       state.company = selectedCompany;
-      const profileSnapshot = await getDoc(tenantDocument(collections.users, firebaseUser.uid));
-      if (!profileSnapshot.exists() || profileSnapshot.data().isActive === false) throw new Error("Usuário sem acesso ativo.");
-      const storedProfile = profileSnapshot.data();
+      let profileSnapshot = await getDoc(tenantDocument(collections.users, firebaseUser.uid));
+      let storedProfile;
+      let profileDocId = firebaseUser.uid;
+      if (profileSnapshot.exists()) {
+        storedProfile = profileSnapshot.data();
+        profileDocId = profileSnapshot.id;
+      } else {
+        const legacyProfileSnapshot = await getDoc(doc(db, "users", firebaseUser.uid));
+        if (!legacyProfileSnapshot.exists()) throw new Error("Usuário sem acesso ativo nesta empresa.");
+        storedProfile = legacyProfileSnapshot.data();
+        const legacyCompanyId = storedProfile.companyId || storedProfile.empresa_id;
+        if (String(legacyCompanyId || "") !== String(selectedCompany.id)) {
+          throw new Error("Este usuário não pertence à empresa selecionada.");
+        }
+        await setDoc(tenantDocument(collections.users, firebaseUser.uid), {
+          ...storedProfile,
+          empresa_id: selectedCompany.id,
+          companyId: selectedCompany.id,
+          migratedFromLegacyUsersAt: Date.now(),
+        }, { merge: true });
+      }
+      if (storedProfile.isActive === false) throw new Error("Usuário sem acesso ativo.");
       const profileCompanyId = storedProfile.companyId || storedProfile.empresa_id;
       if (profileCompanyId && selectedCompany.id !== profileCompanyId) {
         throw new Error("Este usuário não pertence à empresa selecionada.");
@@ -2536,7 +2555,7 @@ async function init() {
       state.user = safeSessionUser({
         ...storedProfile,
         companyId: selectedCompany.id,
-        docId: profileSnapshot.id,
+        docId: profileDocId,
         uid: firebaseUser.uid,
       });
       state.authStage = "user";
