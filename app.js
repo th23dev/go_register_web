@@ -244,7 +244,8 @@ function paymentMethodGroupLabel(recordOrMethod) {
 function safeSessionUser(user) {
   if (!user) return null;
   const { passwordHash, sessionToken, ...safeUser } = user;
-  return safeUser;
+  const companyId = String(safeUser.companyId || state.company?.id || safeUser.empresa_id || "");
+  return { ...safeUser, companyId };
 }
 
 function randomToken() {
@@ -487,10 +488,19 @@ function isReady() {
   return state.loadedCollections.size >= Object.keys(collections).length && !state.loading;
 }
 
-function tenantId() { return state.company?.id || ""; }
+function tenantId() { return state.user?.companyId || state.company?.companyId || state.company?.id || ""; }
+function companyFromSnapshot(snapshot) {
+  return { ...snapshot.data(), id: snapshot.id, companyId: snapshot.id };
+}
 function cachedCompany() {
   try {
-    return JSON.parse(localStorage.getItem("goRegisterCompany") || sessionStorage.getItem("goRegisterCompany") || "null");
+    const company = JSON.parse(localStorage.getItem("goRegisterCompany") || sessionStorage.getItem("goRegisterCompany") || "null");
+    if (company?.companyId) return { ...company, id: company.companyId };
+    if (company) {
+      localStorage.removeItem("goRegisterCompany");
+      sessionStorage.removeItem("goRegisterCompany");
+    }
+    return null;
   } catch {
     localStorage.removeItem("goRegisterCompany");
     sessionStorage.removeItem("goRegisterCompany");
@@ -503,7 +513,7 @@ function persistCompany(company) {
 }
 function tenantPayload(payload) {
   if (!tenantId()) throw new Error("Empresa não autenticada.");
-  return { ...payload, empresa_id: tenantId() };
+  return { ...payload, empresa_id: tenantId(), companyId: tenantId() };
 }
 function tenantDocId(id) {
   if (!tenantId()) throw new Error("Empresa não autenticada.");
@@ -627,7 +637,7 @@ function renderCompanyLogin(error = "") {
       const snapshot = await getDocs(query(collection(db, "companies"), where("identifierNormalized", "==", identifier), where("isActive", "==", true), limit(1)));
       if (snapshot.empty) throw new Error("Empresa não encontrada ou desativada.");
       const companyDoc = snapshot.docs[0];
-      state.company = { id: companyDoc.id, ...companyDoc.data() };
+      state.company = companyFromSnapshot(companyDoc);
       state.authStage = "company";
       persistCompany(state.company);
       renderUserLogin();
@@ -2514,15 +2524,21 @@ async function init() {
       state.company = selectedCompany;
       const profileSnapshot = await getDoc(tenantDocument(collections.users, firebaseUser.uid));
       if (!profileSnapshot.exists() || profileSnapshot.data().isActive === false) throw new Error("Usuário sem acesso ativo.");
-      const profile = { ...profileSnapshot.data(), docId: profileSnapshot.id, uid: firebaseUser.uid };
-      if (selectedCompany?.id && selectedCompany.id !== profile.empresa_id) {
+      const storedProfile = profileSnapshot.data();
+      const profileCompanyId = storedProfile.companyId || storedProfile.empresa_id;
+      if (profileCompanyId && selectedCompany.id !== profileCompanyId) {
         throw new Error("Este usuário não pertence à empresa selecionada.");
       }
-      const companySnapshot = await getDoc(doc(db, "companies", profile.empresa_id));
+      const companySnapshot = await getDoc(doc(db, "companies", selectedCompany.id));
       if (!companySnapshot.exists() || companySnapshot.data().isActive === false) throw new Error("Empresa inexistente ou desativada.");
-      state.company = { id: companySnapshot.id, ...companySnapshot.data() };
+      state.company = companyFromSnapshot(companySnapshot);
       persistCompany(state.company);
-      state.user = profile;
+      state.user = safeSessionUser({
+        ...storedProfile,
+        companyId: selectedCompany.id,
+        docId: profileSnapshot.id,
+        uid: firebaseUser.uid,
+      });
       state.authStage = "user";
       state.loading = true;
       renderApp();
