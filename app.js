@@ -1948,7 +1948,6 @@ function openUserModal(item = null) {
     : [["OPERATOR", "Funcionario"]];
   openModal(item ? "Editar Usuario" : "Novo Usuario", `
     ${input("username", "Usuario", item?.username || "")}
-    ${item ? "" : input("email", "E-mail de acesso", "", "email")}
     ${item ? "" : input("password", "Senha", "", "password")}
     ${select("role", "Perfil", roleOptions, item?.role || "OPERATOR")}
     ${select("isActive", "Status", [["true", "Ativo"], ["false", "Inativo"]], item?.isActive === false ? "false" : "true")}
@@ -1956,15 +1955,16 @@ function openUserModal(item = null) {
     const role = isMasterAdmin() ? form.get("role") : "OPERATOR";
     const username = String(form.get("username") || "").trim();
     if (username.length < 3) throw new Error("Informe um usuario com pelo menos 3 caracteres.");
-    const email = item?.email || String(form.get("email") || document.querySelector('#modalForm input[name="email"]')?.value || "").trim().toLowerCase();
-    if (!item && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error("Informe um e-mail de acesso válido.");
+    const usernameNormalized = username.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+    let authEmail = item?.authEmail || "";
     const password = String(form.get("password") || "");
     if (!item && !isAllowedPassword(password)) throw new Error("Informe uma senha com pelo menos 6 caracteres, ou use a senha padrao admin.");
     let userDocId = item ? docKey(item, id) : "";
     if (!item) {
       const secondaryApp = initializeApp(firebaseConfig, `create-user-${Date.now()}`);
       try {
-        const credential = await createUserWithEmailAndPassword(getAuth(secondaryApp), email, password);
+        authEmail = `${tenantId()}.${(await sha256Hex(`${usernameNormalized}:${randomToken()}`)).slice(0, 24)}@users.goregister.app`;
+        const credential = await createUserWithEmailAndPassword(getAuth(secondaryApp), authEmail, password);
         userDocId = credential.user.uid;
       } finally {
         await signOut(getAuth(secondaryApp)).catch(() => {});
@@ -1974,14 +1974,15 @@ function openUserModal(item = null) {
     await setDoc(tenantDocument(collections.users, userDocId), tenantPayload({
       id,
       username,
-      email,
-      usernameNormalized: username.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase(),
+      email: item?.email || null,
+      authEmail,
+      usernameNormalized,
       role,
       isActive: form.get("isActive") === "true",
       createdAt: item?.createdAt || Date.now(),
     }));
-    const aliasId = `${tenantId()}__${username.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()}`;
-    await setDoc(doc(db, "login_aliases", aliasId), tenantPayload({ uid: userDocId, email, username }));
+    const aliasId = `${tenantId()}__${usernameNormalized}`;
+    await setDoc(doc(db, "login_aliases", aliasId), tenantPayload({ uid: userDocId, email: authEmail, username }));
     toast("Usuario salvo.");
   });
 }
