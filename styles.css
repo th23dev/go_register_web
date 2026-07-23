@@ -1120,6 +1120,8 @@ tr:last-child td {
 }
 
 .pos-layout {
+  width: 100%;
+  min-width: 0;
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
   gap: 0;
@@ -1133,6 +1135,8 @@ tr:last-child td {
 }
 
 .pos-cart {
+  min-width: 0;
+  overflow: hidden;
   border-left: 1px solid var(--line);
   background: #fff;
 }
@@ -1249,7 +1253,25 @@ body.dark .transactions-scroll::-webkit-scrollbar-thumb:hover {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #f9fbfd;
+  color: var(--text);
   padding: 12px;
+}
+
+body.dark .product-row,
+body.dark .cart-row {
+  border-color: var(--line);
+  background: var(--background);
+  color: var(--text);
+}
+
+body.dark .product-row.out {
+  background: color-mix(in srgb, var(--danger) 12%, var(--background));
+}
+
+.product-row > span,
+.cart-row > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .transaction-row--cancelled .transaction-title,
@@ -1359,10 +1381,33 @@ body.dark .transaction-row .amount.minus {
 }
 
 .total-line {
+  min-width: 0;
   display: flex;
   justify-content: space-between;
+  gap: 16px;
   font-size: 20px;
   font-weight: 800;
+}
+
+.total-line span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 1180px) {
+  .pos-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .pos-cart {
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+
+  .pos-products,
+  .pos-cart {
+    min-height: auto;
+  }
 }
 
 .modal-backdrop {
