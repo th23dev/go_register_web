@@ -24,35 +24,6 @@ async function requireCompany(companyId) {
   return cleanCompanyId;
 }
 
-function normalizedLogin(value) {
-  return String(value || "").trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-}
-
-exports.resolveCompanyLogin = onCall({ region: "southamerica-east1" }, async (request) => {
-  const companyId = await requireCompany(request.data?.companyId);
-  const login = normalizedLogin(request.data?.login);
-  if (!login || login.length > 254) throw new HttpsError("invalid-argument", "Credenciais inválidas.");
-
-  const database = getFirestore();
-  const companySnapshot = await database.doc(`companies/${companyId}`).get();
-  if (companySnapshot.data().isActive === false) throw new HttpsError("not-found", "Credenciais inválidas.");
-
-  const usersSnapshot = await database.collection(`companies/${companyId}/users`).get();
-  const userSnapshot = usersSnapshot.docs.find((item) => {
-    const user = item.data();
-    return [user.usernameNormalized, user.username, user.email, user.authEmail]
-      .some((value) => normalizedLogin(value) === login);
-  });
-  if (!userSnapshot || userSnapshot.data().isActive === false) {
-    throw new HttpsError("not-found", "Credenciais inválidas.");
-  }
-
-  const user = userSnapshot.data();
-  const email = String(user.authEmail || user.email || "").trim();
-  if (!email) throw new HttpsError("not-found", "Credenciais inválidas.");
-  return { email };
-});
-
 exports.updateCompanyUserPassword = onCall({ region: "southamerica-east1" }, async (request) => {
   await requirePlatformAdministrator(request);
   const database = getFirestore();

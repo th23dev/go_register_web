@@ -14,7 +14,6 @@ import {
   deleteDoc,
 } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-firestore.js";
 import { getAuth, onAuthStateChanged, setPersistence, browserLocalPersistence, signInWithEmailAndPassword, createUserWithEmailAndPassword, reauthenticateWithCredential, EmailAuthProvider, updatePassword, signOut } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-auth.js";
-import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-functions.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyDaNbVpvkGov4vtabbk-bAWOpb7nDpmzrA",
@@ -28,8 +27,6 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 const auth = getAuth(app);
-const functions = getFunctions(app, "southamerica-east1");
-const resolveCompanyLogin = httpsCallable(functions, "resolveCompanyLogin");
 const root = document.querySelector("#app");
 
 const collections = {
@@ -669,23 +666,17 @@ function renderUserLogin(error = "") {
     try {
       const login = String(form.get("username") || "").trim();
       let email = "";
-      try {
-        const resolved = await resolveCompanyLogin({ companyId: tenantId(), login });
-        email = String(resolved.data?.email || "");
-      } catch {
-        // Compatibilidade com contas antigas que ainda possuem aliases globais.
-        if (login.includes("@")) {
-          const emailHash = await sha256Hex(login.toLowerCase());
-          const aliasSnapshot = await getDoc(doc(db, "login_aliases", `${tenantId()}__email__${emailHash}`));
-          email = aliasSnapshot.exists() && aliasSnapshot.data().empresa_id === tenantId()
-            ? String(aliasSnapshot.data().email || "")
-            : login;
-        } else {
-          const username = login.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-          const aliasSnapshot = await getDoc(doc(db, "login_aliases", `${tenantId()}__${username}`));
-          if (aliasSnapshot.exists() && aliasSnapshot.data().empresa_id === tenantId()) {
-            email = String(aliasSnapshot.data().email || "");
-          }
+      if (login.includes("@")) {
+        const emailHash = await sha256Hex(login.toLowerCase());
+        const aliasSnapshot = await getDoc(doc(db, "login_aliases", `${tenantId()}__email__${emailHash}`));
+        email = aliasSnapshot.exists() && aliasSnapshot.data().empresa_id === tenantId()
+          ? String(aliasSnapshot.data().email || "")
+          : login;
+      } else {
+        const username = login.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+        const aliasSnapshot = await getDoc(doc(db, "login_aliases", `${tenantId()}__${username}`));
+        if (aliasSnapshot.exists() && aliasSnapshot.data().empresa_id === tenantId()) {
+          email = String(aliasSnapshot.data().email || "");
         }
       }
       if (!email) throw new Error("Usuário ou senha inválidos.");
