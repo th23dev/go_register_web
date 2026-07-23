@@ -671,7 +671,7 @@ function renderUserLogin(error = "") {
       const aliasSnapshot = await getDoc(doc(db, "login_aliases", `${tenantId()}__${username}`));
       let authEmail = "";
       if (aliasSnapshot.exists() && aliasSnapshot.data().empresa_id === tenantId()) {
-        authEmail = String(aliasSnapshot.data().email || "");
+        authEmail = String(aliasSnapshot.data().authEmail || aliasSnapshot.data().email || "");
       }
       if (!authEmail) throw new Error("Usuário ou senha inválidos.");
       await signInWithEmailAndPassword(auth, authEmail, String(form.get("password") || ""));
@@ -1948,6 +1948,9 @@ function openUserModal(item = null) {
     const username = String(form.get("username") || "").trim();
     if (username.length < 3) throw new Error("Informe um usuario com pelo menos 3 caracteres.");
     const usernameNormalized = username.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+    if (!item && state.data.users.some((user) => String(user.usernameNormalized || user.username || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase() === usernameNormalized)) {
+      throw new Error("Este nome de usuário já existe nesta empresa.");
+    }
     let authEmail = item?.authEmail || "";
     const password = String(form.get("password") || "");
     if (!item && !isAllowedPassword(password)) throw new Error("Informe uma senha com pelo menos 6 caracteres, ou use a senha padrao admin.");
@@ -1955,9 +1958,15 @@ function openUserModal(item = null) {
     if (!item) {
       const secondaryApp = initializeApp(firebaseConfig, `create-user-${Date.now()}`);
       try {
-        authEmail = `${tenantId()}.${(await sha256Hex(`${usernameNormalized}:${randomToken()}`)).slice(0, 24)}@users.goregister.app`;
-        const credential = await createUserWithEmailAndPassword(getAuth(secondaryApp), authEmail, password);
-        userDocId = credential.user.uid;
+        for (let attempt = 0; attempt < 3 && !userDocId; attempt += 1) {
+          authEmail = `tenant-${(await sha256Hex(`${tenantId()}:${usernameNormalized}:${randomToken()}`)).slice(0, 40)}@users.goregister.app`;
+          try {
+            const credential = await createUserWithEmailAndPassword(getAuth(secondaryApp), authEmail, password);
+            userDocId = credential.user.uid;
+          } catch (error) {
+            if (error?.code !== "auth/email-already-in-use" || attempt === 2) throw error;
+          }
+        }
       } finally {
         await signOut(getAuth(secondaryApp)).catch(() => {});
         await deleteApp(secondaryApp);
@@ -1974,7 +1983,7 @@ function openUserModal(item = null) {
       createdAt: item?.createdAt || Date.now(),
     }));
     const aliasId = `${tenantId()}__${usernameNormalized}`;
-    await setDoc(doc(db, "login_aliases", aliasId), tenantPayload({ uid: userDocId, email: authEmail, username }));
+    await setDoc(doc(db, "login_aliases", aliasId), tenantPayload({ uid: userDocId, authEmail, username }));
     toast("Usuario salvo.");
   });
 }
