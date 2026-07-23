@@ -27,6 +27,16 @@ service cloud.firestore {
     function belongsToCompany(data, companyId) {
       return !('empresa_id' in data) || data.empresa_id == companyId;
     }
+    function legacyProfileBelongsTo(companyId) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && (
+          (('companyId' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data)
+            && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.companyId == companyId)
+          || (('empresa_id' in get(/databases/$(database)/documents/users/$(request.auth.uid)).data)
+            && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.empresa_id == companyId)
+        );
+    }
 
     match /platform_admins/{uid} {
       allow read, create, update: if platformAdmin();
@@ -42,7 +52,8 @@ service cloud.firestore {
           || (signedIn() && activeCompany(companyId) && request.auth.uid == uid)
           || (companyUser(companyId) && companyAdmin(companyId));
         allow create: if platformAdmin()
-          || (signedIn() && activeCompany(companyId) && request.auth.uid == uid
+          || (activeCompany(companyId) && request.auth.uid == uid
+            && legacyProfileBelongsTo(companyId)
             && belongsToCompany(request.resource.data, companyId))
           || (companyAdmin(companyId) && belongsToCompany(request.resource.data, companyId));
         allow update: if platformAdmin() || (companyAdmin(companyId)
