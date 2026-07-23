@@ -654,7 +654,7 @@ function renderUserLogin(error = "") {
     <img class="login-logo" src="./assets/goregisterlogo.png" alt="GO REGISTER" />
     <span class="company-login-badge">${icon("domain")} ${escapeHtml(state.company?.name || "Empresa")}</span>
     <h1 class="login-title">Entrar na conta</h1>
-    <label class="field"><span>Usuário ou e-mail</span><span class="input-wrap">${icon("person")}<input name="username" autocomplete="username" required /></span></label>
+    <label class="field"><span>Nome de usuário</span><span class="input-wrap">${icon("person")}<input name="username" autocomplete="username" required /></span></label>
     <label class="field"><span>Senha</span><span class="input-wrap">${icon("key")}<input name="password" type="password" autocomplete="current-password" required /></span></label>
     <p class="error">${escapeHtml(error)}</p><button class="btn full" type="submit">Entrar</button>
     <button class="btn secondary full" type="button" id="changeCompany">Trocar empresa</button>
@@ -667,22 +667,14 @@ function renderUserLogin(error = "") {
     const form = new FormData(event.currentTarget);
     try {
       const login = String(form.get("username") || "").trim();
-      let email = "";
-      if (login.includes("@")) {
-        const emailHash = await sha256Hex(login.toLowerCase());
-        const aliasSnapshot = await getDoc(doc(db, "login_aliases", `${tenantId()}__email__${emailHash}`));
-        email = aliasSnapshot.exists() && aliasSnapshot.data().empresa_id === tenantId()
-          ? String(aliasSnapshot.data().email || "")
-          : login;
-      } else {
-        const username = login.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-        const aliasSnapshot = await getDoc(doc(db, "login_aliases", `${tenantId()}__${username}`));
-        if (aliasSnapshot.exists() && aliasSnapshot.data().empresa_id === tenantId()) {
-          email = String(aliasSnapshot.data().email || "");
-        }
+      const username = login.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+      const aliasSnapshot = await getDoc(doc(db, "login_aliases", `${tenantId()}__${username}`));
+      let authEmail = "";
+      if (aliasSnapshot.exists() && aliasSnapshot.data().empresa_id === tenantId()) {
+        authEmail = String(aliasSnapshot.data().email || "");
       }
-      if (!email) throw new Error("Usuário ou senha inválidos.");
-      await signInWithEmailAndPassword(auth, email, String(form.get("password") || ""));
+      if (!authEmail) throw new Error("Usuário ou senha inválidos.");
+      await signInWithEmailAndPassword(auth, authEmail, String(form.get("password") || ""));
     } catch (loginError) { renderUserLogin(loginError.message || "Usuário ou senha inválidos."); }
   });
 }
