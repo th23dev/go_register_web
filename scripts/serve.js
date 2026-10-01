@@ -48,4 +48,5 @@ const server = http.createServer((request, response) => {
 server.listen(port, "127.0.0.1", () => {
   console.log(`GO REGISTER: http://localhost:${port}`);
   console.log(`Administração: http://localhost:${port}/admin/`);
+  console.log('Firebase Host: https://goregister-7394b.web.app');
 });

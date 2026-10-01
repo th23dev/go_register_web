@@ -171,13 +171,13 @@ test("lancamento pode ser cancelado ou apagado sem depender do Blaze", async () 
   assert.doesNotMatch(app, /cancelReceivableCallable/);
 });
 
-test("filtro todas agrupa as dividas por cliente", async () => {
+test("todos os filtros agrupam as dividas por cliente em ordem alfabetica", async () => {
   const app = await readFile(path.join(root, "app.js"), "utf8");
   const start = app.indexOf("function renderReceivables()");
   const end = app.indexOf("function reportSales(bounds)", start);
   const pageSource = app.slice(start, end);
 
-  assert.match(pageSource, /receivablesStatus === "ALL"[\s\S]*groupReceivablesByCustomer\(matchingAccounts\)/);
+  assert.match(pageSource, /const accounts = groupReceivablesByCustomer\(matchingAccounts\);/);
 });
 
 test("backup operacional inclui o modulo sem dados de cobranca do plano", async () => {

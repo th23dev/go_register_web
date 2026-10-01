@@ -3019,6 +3019,28 @@ body.dark {
   border-radius: 12px;
   background: var(--surface);
 }
+
+.report-sales-total { display: grid; gap: 4px; text-align: right; }
+.report-sales-total > span { font-size: 13px; color: var(--muted); }
+.report-sales-total > strong { font-size: 26px; white-space: nowrap; }
+.report-sales-total > small { color: var(--muted); font-size: 12px; }
+.consolidated-report-table td { vertical-align: middle; }
+.consolidated-report-table th:nth-child(5),
+.consolidated-report-table td:nth-child(5),
+.consolidated-report-table th:last-child,
+.consolidated-report-table td:last-child { text-align: right; }
+.consolidated-report-table time,
+.consolidated-report-table .amount { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.report-payment-parts { display: grid; gap: 6px; max-width: 300px; }
+.report-payment-parts > span { display: flex; justify-content: space-between; gap: 16px; }
+.report-payment-parts strong { white-space: nowrap; font-weight: 500; font-variant-numeric: tabular-nums; }
+.consolidated-report-table .report-stock-badge { color: var(--muted); background: var(--surface); border: 1px solid var(--border); }
+.report-no-value { font-size: 12px; }
+.report-value-note { display: block; color: var(--muted); margin-top: 4px; }
+@media (max-width: 600px) {
+  .report-sales-total { text-align: left; }
+  .consolidated-report-table { min-width: 850px; }
+}
 .receivables-view-switch button {
   display: flex;
   align-items: center;
@@ -4450,3 +4472,55 @@ body.dark .pos-cart {
     margin-bottom: 4px;
   }
 }
+
+/* Animate the existing sidebar without rebuilding the current page. */
+@media (min-width: 981px) {
+  .app-shell { transition: padding-left 320ms cubic-bezier(.22, 1, .36, 1); }
+  .sidebar {
+    overflow-x: clip;
+    transition: width 320ms cubic-bezier(.22, 1, .36, 1), padding 320ms cubic-bezier(.22, 1, .36, 1);
+  }
+  .sidebar .nav button {
+    overflow: hidden;
+    transition: width 320ms cubic-bezier(.22, 1, .36, 1), padding 320ms cubic-bezier(.22, 1, .36, 1), background-color 160ms ease, color 160ms ease;
+  }
+  .sidebar .nav-label,
+  .sidebar .logout-label,
+  .sidebar .sync-label {
+    display: inline-block;
+    max-width: 220px;
+    opacity: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    transition: opacity 180ms ease, max-width 320ms cubic-bezier(.22, 1, .36, 1);
+  }
+  .app-shell.sidebar-collapsed .nav-label,
+  .app-shell.sidebar-collapsed .logout-label,
+  .app-shell.sidebar-collapsed .sync-label {
+    display: inline-block;
+    max-width: 0;
+    opacity: 0;
+  }
+  .app-shell.sidebar-collapsed .nav button,
+  .app-shell.sidebar-collapsed .sync-pill,
+  .app-shell.sidebar-collapsed .sidebar-footer .btn.secondary { gap: 0; }
+  .sidebar .material-symbols-rounded { flex-shrink: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .app-shell, .sidebar, .sidebar .nav button,
+  .sidebar .nav-label, .sidebar .logout-label, .sidebar .sync-label { transition: none; }
+}
+
+/* Keyboard navigation remains visible across all themes. */
+:where(button, a, input, select, textarea, [tabindex]):focus-visible {
+  outline: 3px solid var(--primary, #1264ed);
+  outline-offset: 3px;
+}
+.input-wrap:focus-within { outline: 2px solid var(--primary, #1264ed); outline-offset: 2px; }
+.sidebar button:focus-visible { outline-color: var(--sidebar-text); outline-offset: -3px; }
+.skip-content { position: fixed; top: 8px; left: 8px; z-index: 1000; transform: translateY(-160%); padding: 12px 18px; background: var(--surface, white); color: var(--text, #111827); border: 2px solid var(--primary, #1264ed); }
+.skip-content:focus { transform: translateY(0); }
+.keyboard-help { display: grid; grid-template-columns: minmax(120px, auto) 1fr; gap: 14px 20px; }
+.keyboard-help dt { font-weight: 700; }
+.keyboard-help dd { margin: 0; color: var(--muted); }
+@media (max-width: 520px) { .keyboard-help { grid-template-columns: 1fr; gap: 8px; } .keyboard-help dd { margin-bottom: 12px; } }

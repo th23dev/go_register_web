@@ -1,3 +1,4 @@
+import { installKeyboardSupport, rememberFocus } from "./keyboard.mjs";
 import { initializeApp, deleteApp } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-app.js";
 import {
   getFirestore,
@@ -1260,9 +1261,11 @@ async function exitCompany() {
 }
 
 function renderApp(focusId = null) {
+  const restoreFocus = rememberFocus(root);
   enforceAccess();
   root.innerHTML = `
     <div class="app-shell ${state.sidebarCollapsed ? "sidebar-collapsed" : ""}">
+      <button type="button" class="skip-content" data-action="focus-content">Ir para o conteúdo</button>
       <aside class="sidebar">
         <div class="brand">
           <img src="./assets/goregisterlogo.png" alt="" />
@@ -1284,7 +1287,7 @@ function renderApp(focusId = null) {
           <button class="btn secondary" id="logoutBtn" title="Sair" aria-label="Sair">${icon("logout")}<span class="logout-label">Sair</span></button>
         </div>
       </aside>
-      <main class="main">
+      <main class="main" tabindex="-1">
         ${renderView()}
       </main>
     </div>
@@ -1301,6 +1304,7 @@ function renderApp(focusId = null) {
   });
   document.querySelector("#logoutBtn").addEventListener("click", logout);
   bindViewEvents();
+  if (!focusId) restoreFocus();
   if (focusId) {
     const field = document.querySelector(`#${focusId}`);
     field?.focus();
@@ -1318,6 +1322,7 @@ function renderView() {
         <h1>${title}</h1><span class="topbar-company">${escapeHtml(state.company?.name || "")}</span>
       </div>
       <div class="topbar-actions">
+        <button class="icon-btn" type="button" data-action="keyboard-help" title="Ajuda do teclado (F1)" aria-label="Ajuda do teclado">${icon("keyboard")}</button>
         ${actions ? `<div class="topbar-page-actions">${actions}</div>` : ""}
         <div class="notification-anchor">
           <button class="icon-btn notification-trigger" type="button" data-action="toggle-notifications" aria-label="Abrir notificações" aria-expanded="${state.notificationsOpen}" aria-controls="notificationCenter">
@@ -2024,9 +2029,7 @@ function renderReceivables() {
     if (!search) return true;
     return `${receivable.customerName || ""} ${receivable.description || ""}`.toLocaleLowerCase("pt-BR").includes(search);
   });
-  const accounts = state.filters.receivablesStatus === "ALL"
-    ? groupReceivablesByCustomer(matchingAccounts)
-    : matchingAccounts;
+  const accounts = groupReceivablesByCustomer(matchingAccounts);
   const customers = state.receivables.customers
     .filter((customer) => customer.isActive !== false)
     .filter((customer) => !customerSearch || `${customer.name || ""} ${customer.phone || ""} ${customer.document || ""}`.toLocaleLowerCase("pt-BR").includes(customerSearch))
@@ -2147,17 +2150,8 @@ function renderAnalyticsRanking(title, rows, valueFormatter, emptyMessage = "Sem
   }).join("") || `<p class="muted">${escapeHtml(emptyMessage)}</p>`}</div></article>`;
 }
 
-function renderBusinessAnalytics(analytics, periodLabel) {
-  const comparison = analytics.comparisonPercent;
-  const comparisonLabel = comparison == null ? "Sem período anterior comparável" : `${comparison >= 0 ? "↑" : "↓"} ${Math.abs(comparison).toFixed(1)}% contra o período anterior`;
+function renderBusinessAnalytics(analytics) {
   return `<section class="business-analytics">
-    <div class="report-section-heading"><div><h2>Indicadores do negócio</h2><p>${escapeHtml(periodLabel)}</p></div><small class="muted">Lucro estimado pelo custo atual dos produtos</small></div>
-    <div class="analytics-kpis">
-      <article class="report-kpi"><span>Ticket médio</span><strong>${money.format(analytics.averageTicket)}</strong><small>${analytics.saleCount} venda(s) de estoque</small></article>
-      <article class="report-kpi"><span>Lucro estimado</span><strong>${money.format(analytics.estimatedProfit)}</strong><small>Custo estimado: ${money.format(analytics.estimatedCost)}</small></article>
-      <article class="report-kpi"><span>Comparação</span><strong>${comparison == null ? "—" : `${comparison >= 0 ? "+" : ""}${comparison.toFixed(1)}%`}</strong><small>${escapeHtml(comparisonLabel)}</small></article>
-      <article class="report-kpi"><span>Produtos sem saída</span><strong>${analytics.inactiveProducts.length}</strong><small>No período selecionado</small></article>
-    </div>
     <div class="report-subsection-heading"><h3>Análises detalhadas</h3><span>Rankings e padrões do período</span></div>
     <div class="analytics-grid">
       ${renderAnalyticsRanking("Produtos mais vendidos", analytics.topProducts, (item) => `${formatDecimalInput(item.quantity)} un. · ${money.format(item.revenue)}`)}
@@ -2282,6 +2276,7 @@ function reportConsolidatedRows(sales, financialMovements, manualStockEntries) {
       typeClass: "good",
       description: saleProductNames(record),
       detail: salePaymentSummary(record),
+      paymentParts: salePaymentParts(record),
       quantity: quantity ? formatDecimalInput(quantity) : "-",
       amount: saleAmount(record),
       amountClass: "plus",
@@ -2423,16 +2418,17 @@ function renderReports() {
           </article>
         </div>
       </section>
-      ${renderBusinessAnalytics(analytics, periodLabel)}
+      ${renderBusinessAnalytics(analytics)}
       <div class="panel table-wrap report-table">
         <div class="report-section-heading">
           <div>
-            <h2>Relatorio Consolidado</h2>
+            <h2>Vendas e movimentações</h2>
+            <p>${escapeHtml(periodLabel)} · Registros mais recentes primeiro</p>
           </div>
-          <strong>${money.format(sold)}</strong>
+          <div class="report-sales-total"><span>Total em vendas</span><strong>${money.format(sold)}</strong><small>Vendas de produtos + vendas manuais</small></div>
         </div>
         <div class="report-table-scroll">
-          <table><thead><tr><th>Data/Hora</th><th>Tipo de venda</th><th>Descricao</th><th>Detalhe/Categoria</th><th>Quantidade</th><th>Valor</th></tr></thead><tbody>
+          <table class="consolidated-report-table"><thead><tr><th>Horário</th><th>Movimentação</th><th>Produto ou descrição</th><th>Pagamento / detalhes</th><th>Quantidade</th><th>Valor da movimentação</th></tr></thead><tbody>
             ${consolidatedTableRows || `<tr><td colspan="6">Sem dados neste periodo.</td></tr>`}
           </tbody></table>
         </div>
@@ -2450,15 +2446,20 @@ function renderGroupedTableRows(items, colspan, renderRow) {
 }
 
 function renderConsolidatedReportRow(item) {
-  const amount = item.amount == null ? "-" : money.format(item.amount);
+  const isStock = item.amount == null;
+  const amount = isStock ? "Sem valor financeiro" : money.format(item.amount);
+  const typeLabel = isStock ? "Entrada de estoque" : item.type === "VENDA" ? "Venda de produtos" : item.type === "VENDA MANUAL" ? "Venda manual" : item.type === "SAIDA" ? "Saída de dinheiro" : item.type;
+  const detail = item.paymentParts?.length
+    ? `<div class="report-payment-parts">${item.paymentParts.map((part) => `<span><span>${escapeHtml(paymentMethodLabel(part.method))}</span><strong>${escapeHtml(money.format(part.amount))}</strong></span>`).join("")}</div>`
+    : escapeHtml(item.detail || "—");
   return `
-    <tr>
-      <td>${item.timestamp ? dateTime.format(new Date(item.timestamp)) : "-"}</td>
-      <td><span class="badge ${escapeHtml(item.typeClass || (item.amountClass === "minus" ? "bad" : "good"))}">${escapeHtml(item.type)}</span></td>
+    <tr class="${isStock ? "report-stock-row" : ""}">
+      <td><time title="${item.timestamp ? escapeHtml(dateTime.format(new Date(item.timestamp))) : ""}">${item.timestamp ? new Date(item.timestamp).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : "—"}</time></td>
+      <td><span class="badge ${isStock ? "report-stock-badge" : escapeHtml(item.typeClass || (item.amountClass === "minus" ? "bad" : "good"))}">${escapeHtml(typeLabel)}</span></td>
       <td>${escapeHtml(item.description)}${item.isCancelled ? ` <span class="badge bad">CANCELADA</span>` : ""}</td>
-      <td>${escapeHtml(item.detail || "-")}</td>
+      <td>${detail}</td>
       <td>${escapeHtml(item.quantity || "-")}</td>
-      <td><strong class="amount ${item.amountClass}">${escapeHtml(amount)}</strong></td>
+      <td>${isStock ? `<span class="muted report-no-value">${amount}</span>` : `<strong class="amount ${item.isCancelled ? "muted" : item.amountClass}">${escapeHtml(amount)}</strong>${item.isCancelled ? '<small class="report-value-note">Não entra no total</small>' : ""}`}</td>
     </tr>
   `;
 }
@@ -2800,8 +2801,17 @@ const actions = {
   "cart-clear": () => clearCart(),
   "toggle-sidebar": () => {
     state.sidebarCollapsed = !state.sidebarCollapsed;
-    renderApp();
+    document.querySelector(".app-shell")?.classList.toggle("sidebar-collapsed", state.sidebarCollapsed);
+    const toggle = document.querySelector(".sidebar-toggle");
+    if (toggle) {
+      const label = state.sidebarCollapsed ? "Expandir painel lateral" : "Recolher painel lateral";
+      toggle.title = label;
+      toggle.setAttribute("aria-label", label);
+      toggle.innerHTML = icon(state.sidebarCollapsed ? "keyboard_double_arrow_right" : "keyboard_double_arrow_left");
+    }
   },
+  "focus-content": () => document.querySelector(".main")?.focus(),
+  "keyboard-help": () => showKeyboardHelp(),
   "toggle-notifications": () => {
     state.notificationsOpen = !state.notificationsOpen;
     renderApp();
@@ -3086,7 +3096,9 @@ function openReceivableModal(preselectedCustomerId = "") {
     toast(error.message);
     return;
   }
-  const customers = state.receivables.customers.filter((customer) => customer.isActive !== false);
+  const customers = state.receivables.customers
+    .filter((customer) => customer.isActive !== false)
+    .sort((left, right) => String(left.name || "").trim().localeCompare(String(right.name || "").trim(), "pt-BR", { sensitivity: "base" }));
   if (!customers.length) {
     toast("Cadastre um cliente antes de criar uma conta.");
     openReceivableCustomerModal();
@@ -3361,7 +3373,7 @@ function openReceivableCustomerPaymentHistory(customerKey) {
   const accounts = state.receivables.receivables
     .filter((account) => String(account.customerId ?? account.customer_id ?? "") === customerId)
     .slice()
-    .sort((left, right) => normalizeTimestamp(right.createdAt) - normalizeTimestamp(left.createdAt));
+    .sort((left, right) => String(left.description || "Conta manual").trim().localeCompare(String(right.description || "Conta manual").trim(), "pt-BR", { sensitivity: "base", numeric: true }));
   const summary = receivablesSummary(accounts);
   document.querySelector("#modalRoot").innerHTML = `
     <div class="modal-backdrop">
@@ -4929,4 +4941,26 @@ window.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && state.notificationsOpen) closeNotifications();
 });
 
+function showKeyboardHelp() {
+  document.querySelector("#modalRoot").innerHTML = `
+    <div class="modal-backdrop"><section class="modal">
+      <header><h2>Navegação pelo teclado</h2><button class="icon-btn" type="button" data-close-modal aria-label="Fechar">${icon("close")}</button></header>
+      <dl class="keyboard-help">
+        <dt>Tab / Shift + Tab</dt><dd>Avançar ou voltar entre os controles.</dd>
+        <dt>Enter / Espaço</dt><dd>Acionar o botão selecionado. Enter também envia formulários.</dd>
+        <dt>↑ / ↓ no menu</dt><dd>Percorrer as abas. Enter abre a aba selecionada.</dd>
+        <dt>Home / End no menu</dt><dd>Ir para a primeira ou última aba.</dd>
+        <dt>Alt + M</dt><dd>Ir para o menu lateral.</dd>
+        <dt>Alt + ←</dt><dd>Recolher a barra lateral.</dd>
+        <dt>Alt + →</dt><dd>Expandir a barra lateral.</dd>
+        <dt>Alt + B</dt><dd>Ir para a busca da tela atual.</dd>
+        <dt>Esc</dt><dd>Fechar o diálogo ou as notificações.</dd>
+        <dt>F1</dt><dd>Abrir esta ajuda.</dd>
+      </dl>
+      <footer><button class="btn secondary" type="button" data-close-modal>Fechar</button></footer>
+    </section></div>`;
+  document.querySelectorAll("[data-close-modal]").forEach((button) => button.addEventListener("click", closeModal));
+}
+
+installKeyboardSupport({ showHelp: showKeyboardHelp });
 init();
