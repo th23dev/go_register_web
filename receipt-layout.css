@@ -1,0 +1,40 @@
+.receipt-paper{box-sizing:border-box;display:grid;gap:12px;width:80mm;max-width:calc(100% - 24px);margin:12px auto;padding:5mm;border:1px solid #aaa;border-radius:0;background:#fff;color:#000;font:12px/1.35 Arial,sans-serif}
+.receipt-paper *{box-sizing:border-box}
+.receipt-paper>*{min-width:0}
+.receipt-paper .receipt-brand{display:flex;align-items:center;gap:10px}
+.receipt-paper .receipt-logo{display:block;width:22mm;max-width:30%;height:auto;max-height:25mm;margin:0;object-fit:contain;flex-shrink:0}
+.receipt-paper .receipt-business{display:grid;gap:2px;min-width:0;overflow-wrap:anywhere}
+.receipt-paper .receipt-business strong{font-size:18px;line-height:1.15}
+.receipt-paper .receipt-business span{font-size:10px}
+.receipt-paper .receipt-heading{text-align:center;border-block:1px dashed #777;padding:10px 0}
+.receipt-paper .receipt-heading strong{display:block;font-size:16px;letter-spacing:.5px}
+.receipt-paper .receipt-heading span{font-size:11px;letter-spacing:.5px}
+.receipt-paper .receipt-meta{display:grid;grid-template-columns:1fr 1fr;gap:5px 8px;font-size:10px;color:#000;border:0;padding:0}
+.receipt-paper .receipt-meta span{overflow-wrap:anywhere;min-width:0}
+.receipt-paper .receipt-meta span:nth-child(even){text-align:right}
+.receipt-paper .receipt-items{display:block;border-top:1px dashed #777;padding-top:10px}
+.receipt-paper .receipt-table{border-collapse:collapse;table-layout:fixed;width:100%;min-width:0;font-size:11px;background:#fff}
+.receipt-paper .receipt-table th,.receipt-paper .receipt-table td{padding:7px 3px;color:#000;border:0;vertical-align:top;text-align:right;background:#fff;overflow-wrap:anywhere}
+.receipt-paper .receipt-table th{background:#e5e5e5;font-size:9px;line-height:1.3;text-transform:uppercase}
+.receipt-paper .receipt-table td{font-size:11px}
+.receipt-paper .receipt-table th:first-child,.receipt-paper .receipt-table td:first-child{text-align:left;width:36%}
+.receipt-paper .receipt-table th:nth-child(2){width:12%}
+.receipt-paper .receipt-table th:nth-child(3),.receipt-paper .receipt-table th:nth-child(4){width:26%}
+.receipt-paper .receipt-table tr:hover{background:#fff}
+.receipt-paper .receipt-payments{display:grid;gap:8px;border-top:1px dashed #777;padding-top:10px}
+.receipt-paper .receipt-section-label{display:block;padding:5px;background:#e5e5e5;text-transform:uppercase;font-weight:700}
+.receipt-paper .receipt-line{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+.receipt-paper .receipt-line strong{white-space:nowrap;flex-shrink:0;color:#000}
+.receipt-paper .receipt-summary{display:grid;gap:6px;border-top:1px dashed #777;padding-top:10px}
+.receipt-paper .receipt-total{display:flex;justify-content:space-between;align-items:center;gap:8px;border:0;padding:6px;background:#e5e5e5;font-size:18px;font-weight:800}
+.receipt-paper .receipt-total strong{font-size:20px;color:#000;white-space:nowrap;flex-shrink:0}
+.receipt-paper .receipt-thanks{text-align:center;border-block:1px dashed #777;padding:12px 0;white-space:pre-line;overflow-wrap:anywhere}
+.receipt-paper .receipt-thanks strong{display:block;font-size:14px;letter-spacing:.5px}
+.receipt-paper .receipt-thanks span{display:block;margin-top:3px;font-size:11px}
+.receipt-paper .receipt-qr{text-align:center;display:grid;justify-items:center;gap:6px}
+.receipt-paper .receipt-qr-code{display:block;width:30mm;height:30mm;max-width:100%;background:#fff}
+.receipt-paper .receipt-qr span{font-size:10px;overflow-wrap:anywhere}
+.receipt-paper .receipt-footer{border-top:1px dashed #777;padding-top:10px;text-align:left;font-size:10px;white-space:pre-line;overflow-wrap:anywhere}
+.receipt-paper .receipt-cancelled{padding:6px;border:1px solid #000;text-align:center;font-weight:700}
+@media(max-width:260px){.receipt-paper{max-width:calc(100% - 12px);padding:3mm}.receipt-paper .receipt-table td:not(:first-child){font-size:9px}.receipt-paper .receipt-table th{font-size:8px}.receipt-paper .receipt-heading strong{font-size:14px}.receipt-paper .receipt-business strong{font-size:16px}}
+@media print{.receipt-paper{margin:0;max-width:none;box-shadow:none}.receipt-paper .receipt-brand,.receipt-paper .receipt-heading,.receipt-paper .receipt-summary,.receipt-paper .receipt-qr,.receipt-paper tr{break-inside:avoid}.receipt-paper .receipt-table th,.receipt-paper .receipt-section-label,.receipt-paper .receipt-total{print-color-adjust:exact;-webkit-print-color-adjust:exact}}

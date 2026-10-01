@@ -1,3 +1,4 @@
+import { receiptSubtotalCents, receiptQrSvg } from "./receipt-core.mjs";
 import { initializeApp, deleteApp } from "https://www.gstatic.com/firebasejs/10.12.4/firebase-app.js";
 import {
   getFirestore,
@@ -4583,10 +4584,11 @@ function buildSaleReceiptText(result) {
     formatReceiptDateTime(sale.timestamp),
     "",
     ...receiptItems.map((item) => `${formatReceiptQuantity(item.quantity)}x ${item.name} - ${money.format(item.subtotalCents / 100)}`),
-    sale.discount > 0 ? `Desconto: - ${money.format(sale.discount)}` : "",
     "",
     "Pagamentos:",
     ...payments.map((part) => `${paymentMethodLabel(part.method)}: ${money.format(part.amountCents / 100)}`),
+    `SUBTOTAL: ${money.format(receiptSubtotalCents(sale, receiptItems) / 100)}`,
+    sale.discount > 0 ? `DESCONTO: - ${money.format(sale.discount)}` : "",
     `TOTAL: ${money.format(sale.finalAmount)}`,
     receiptMessage ? `\n${receiptMessage}` : "",
     exchangePolicy ? `Política de troca: ${exchangePolicy}` : "",
@@ -4683,6 +4685,11 @@ function openSaleReceipt(result) {
       || company.logo_url,
   });
   const identifier = formatCompanyIdentifier(companyTaxIdentifier(company));
+  const date = new Date(sale.timestamp);
+  const receiptNumber = String(sale.id ?? "").padStart(6, "0");
+  const operator = sale.userId ? state.data.users.find((user) => String(user.id) === String(sale.userId)) : null;
+  const operatorName = operator?.username || (sale.userId ? `#${sale.userId}` : "Não informado");
+  const subtotalCents = receiptSubtotalCents(sale, receiptItems);
   const modalRoot = document.querySelector("#modalRoot");
   modalRoot.innerHTML = `
     <div class="modal-backdrop">
@@ -4693,32 +4700,33 @@ function openSaleReceipt(result) {
         </header>
         <div class="receipt-paper" id="saleReceipt">
           ${sale.isCancelled ? `<strong>VENDA CANCELADA — SEM VALIDADE</strong>` : ""}
-          <div class="receipt-company">
+          <div class="receipt-brand">
             ${logoUrl ? `<img class="receipt-logo" src="${escapeHtml(logoUrl)}" alt="Logo de ${escapeHtml(company.name || "empresa")}" referrerpolicy="no-referrer" decoding="sync" fetchpriority="high">` : ""}
-            <strong>${escapeHtml(company.name || "GO REGISTER")}</strong>
+            <div class="receipt-business"><strong>${escapeHtml(company.name || "GO REGISTER")}</strong>
             ${identifier ? `<span>CPF/CNPJ: ${escapeHtml(identifier)}</span>` : ""}
             ${company.address ? `<span>${escapeHtml(company.address)}</span>` : ""}
             ${company.phone ? `<span>Telefone: ${escapeHtml(company.phone)}</span>` : ""}
-            ${socialMedia ? `<span>Redes sociais: ${escapeHtml(socialMedia)}</span>` : ""}
+            ${socialMedia ? `<span>Redes sociais: ${escapeHtml(socialMedia)}</span>` : ""}</div>
           </div>
-          <div class="receipt-meta"><span>${escapeHtml(formatReceiptDateTime(sale.timestamp))}</span></div>
+          <div class="receipt-heading"><strong>COMPROVANTE DE VENDA</strong><span>NÃO É DOCUMENTO FISCAL</span></div>
+          <div class="receipt-meta"><span><b>DATA:</b> ${escapeHtml(date.toLocaleDateString("pt-BR"))}</span><span><b>Nº:</b> ${escapeHtml(receiptNumber)}</span><span><b>HORA:</b> ${escapeHtml(date.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }))}</span><span><b>OPERADOR:</b> ${escapeHtml(operatorName)}</span></div>
           <div class="receipt-items">
+            <table class="receipt-table"><thead><tr><th>Item</th><th>Qtd</th><th>Vlr. unit.</th><th>Vlr. total</th></tr></thead><tbody>
             ${receiptItems.map((item) => `
-              <div class="receipt-item">
-                <span><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(formatReceiptQuantity(item.quantity))} x ${escapeHtml(money.format(item.unitPriceCents / 100))}</small></span>
-                <strong>${escapeHtml(money.format(item.subtotalCents / 100))}</strong>
-              </div>
-            `).join("")}
+              <tr><td>${escapeHtml(item.name)}</td><td>${escapeHtml(formatReceiptQuantity(item.quantity))}</td><td>${escapeHtml(money.format(item.unitPriceCents / 100))}</td><td>${escapeHtml(money.format(item.subtotalCents / 100))}</td></tr>
+            `).join("")}</tbody></table>
           </div>
-          ${sale.discount > 0 ? `<div class="receipt-line"><span>Desconto</span><strong>- ${escapeHtml(money.format(sale.discount))}</strong></div>` : ""}
           <div class="receipt-payments">
-            <strong>Pagamentos</strong>
+            <strong class="receipt-section-label">Pagamentos</strong>
             ${payments.map((part) => `<div class="receipt-line"><span>${escapeHtml(paymentMethodLabel(part.method))}</span><strong>${escapeHtml(money.format(part.amountCents / 100))}</strong></div>`).join("")}
           </div>
-          <div class="receipt-total"><span>TOTAL</span><strong>${escapeHtml(money.format(sale.finalAmount))}</strong></div>
-          ${receiptMessage || exchangePolicy ? `
-            <div class="receipt-company" style="border-top: 1px dashed var(--line); padding-top: 14px; text-align: left; overflow-wrap: anywhere; white-space: pre-line;">
-              ${receiptMessage ? `<span>${escapeHtml(receiptMessage)}</span>` : ""}
+          <div class="receipt-summary"><div class="receipt-line"><span>SUBTOTAL</span><strong>${escapeHtml(money.format(subtotalCents / 100))}</strong></div>
+          ${sale.discount > 0 ? `<div class="receipt-line"><span>DESCONTO</span><strong>- ${escapeHtml(money.format(sale.discount))}</strong></div>` : ""}
+          <div class="receipt-total"><span>TOTAL</span><strong>${escapeHtml(money.format(sale.finalAmount))}</strong></div></div>
+          <div class="receipt-thanks"><strong>${sale.isCancelled ? "VENDA CANCELADA" : "OBRIGADO PELA SUA COMPRA!"}</strong><span>${escapeHtml(receiptMessage || (sale.isCancelled ? "SEM VALIDADE" : "VOLTE SEMPRE!"))}</span></div>
+          <div class="receipt-qr">${receiptQrSvg(company.id, sale)}<span>Nº: ${escapeHtml(receiptNumber)} | ${escapeHtml(formatReceiptDateTime(sale.timestamp))}</span><span>Apresente este código em nossos canais de atendimento.</span></div>
+          ${exchangePolicy ? `
+            <div class="receipt-footer">
               ${exchangePolicy ? `<span><b>Política de troca:</b> ${escapeHtml(exchangePolicy)}</span>` : ""}
             </div>
           ` : ""}

@@ -1897,12 +1897,19 @@ body.dark .transaction-row .amount.minus {
 
 .receipt-paper {
   display: grid;
-  gap: 16px;
-  margin: 16px;
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  background: var(--surface);
-  padding: 20px;
+  gap: 14px;
+  width: 80mm;
+  max-width: calc(100% - 32px);
+  margin: 16px auto;
+  border: 1px solid #aaa;
+  border-radius: 0;
+  background: #fff;
+  color: #000;
+  padding: 5mm;
+  font-family: Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.35;
+  box-sizing: border-box;
 }
 
 .receipt-company {
@@ -1920,7 +1927,7 @@ body.dark .transaction-row .amount.minus {
   width: auto;
   max-width: min(180px, 70%);
   height: auto;
-  max-height: 72px;
+  max-height: 22mm;
   margin: 0 auto 6px;
   object-fit: contain;
 }
@@ -1928,7 +1935,7 @@ body.dark .transaction-row .amount.minus {
 .receipt-company span,
 .receipt-meta,
 .receipt-item small {
-  color: var(--muted);
+  color: #000;
   font-size: 12px;
 }
 
@@ -1939,14 +1946,14 @@ body.dark .transaction-row .amount.minus {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
+  gap: 12px;
 }
 
 .receipt-meta,
 .receipt-items,
 .receipt-payments,
 .receipt-total {
-  border-top: 1px dashed var(--line);
+  border-top: 1px dashed #999;
   padding-top: 14px;
 }
 
@@ -1966,13 +1973,32 @@ body.dark .transaction-row .amount.minus {
   overflow-wrap: anywhere;
 }
 
+.receipt-company span {
+  overflow-wrap: anywhere;
+}
+
+.receipt-item > strong,
+.receipt-line > strong,
+.receipt-total > strong {
+  white-space: nowrap;
+  flex-shrink: 0;
+  text-align: right;
+}
+
+.receipt-footer {
+  border-top: 1px dashed #999;
+  padding-top: 14px;
+  text-align: left;
+  white-space: pre-line;
+}
+
 .receipt-total {
   font-size: 18px;
   font-weight: 800;
 }
 
 .receipt-total strong {
-  color: var(--success);
+  color: #000;
   font-size: 22px;
 }
 
@@ -2476,14 +2502,14 @@ body.dark .transaction-row .amount.minus {
   }
 
   .split-payment-total,
-  .receipt-meta,
-  .receipt-item {
+  .receipt-meta {
     align-items: flex-start;
   }
 
   .receipt-paper {
-    margin: 12px;
-    padding: 16px;
+    margin: 12px auto;
+    max-width: calc(100% - 24px);
+    padding: 5mm;
   }
 
   .modal-backdrop {
@@ -3641,7 +3667,6 @@ tbody tr:hover {
 
 .split-payment-total,
 .split-payment-card,
-.receipt-paper,
 .receivable-payment-heading {
   border-radius: 4px;
 }
