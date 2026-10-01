@@ -17,7 +17,7 @@ test("pagina publica entrega o modulo e invalida caches antigos", async () => {
     readFile(path.join(root, "scripts", "serve.js"), "utf8"),
   ]);
   assert.match(index, /styles\.css\?v=site-ui-release-v3/);
-  assert.match(index, /app\.js\?v=site-ui-release-v3/);
+  assert.match(index, /app\.js\?v=receipt-reopen-v1/);
   assert.match(index, /script-src 'self'/);
   assert.match(index, /connect-src[^;]+https:\/\/\*\.cloudfunctions\.net/);
   assert.match(app, /\.\/receivables-core\.mjs\?v=partial-payment-filter-v2/);
